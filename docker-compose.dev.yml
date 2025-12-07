@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  fireshare:
+    container_name: fireshare-dev
+    build:
+      context: .
+    ports:
+      - "8080:80" # Host:Container
+    environment:
+      # Core admin credentials (change for your environment)
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+      # Use a long, random string in real testing to mimic production secrets
+      - SECRET_KEY=replace_this_with_some_random_string
+
+      # Scan settings
+      - MINUTES_BETWEEN_VIDEO_SCANS=5
+      # 0-100 (frame position for thumbnails)
+      - THUMBNAIL_VIDEO_LOCATION=0
+
+      # Set to the hostname you will hit from your browser (no http/https)
+      # This matters for correct OpenGraph tags in shared links
+      - DOMAIN=localhost
+
+      # File ownership inside the container
+      - PUID=1000
+      - PGID=1000
+
+      # Transcoding options
+      # Creates 720p and 1080p variants when enabled
+      - ENABLE_TRANSCODING=true
+      # Enable GPU acceleration for transcoding using NVENC
+      - TRANSCODE_GPU=true
+      # Whitelist of server-side video codecs allowed for transcoding (comma-separated, logical names)
+      # Supported: H264, HEVC, MPEG2, MPEG4, VC1, VP8, VP9, AV1
+      # By default only H264 is enabled; list others as needed
+      - TRANSCODE_VIDEO_CODECS=H264,HEVC,MPEG2,MPEG4,VC1,VP8,VP9,AV1
+      # Required for GPU transcoding (uncomment when using NVIDIA runtime)
+      # - NVIDIA_DRIVER_CAPABILITIES=all
+
+    # Uncomment to enable GPU passthrough for transcoding (compose v2 syntax example)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+    # Persist data using local bind mounts to mimic deployed storage layout
+    volumes:
+      - ./dev_root/fireshare_data:/data
+      - ./dev_root/fireshare_processed:/processed
+      - ./dev_root/fireshare_videos:/videos
+
+    restart: unless-stopped
+
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+# Then open http://localhost:8080

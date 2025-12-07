@@ -1,7 +1,10 @@
+<!-- NOTE: Fork Information -->
+> This repository is a maintained fork of the original Fireshare project. Most users should consider using or contributing to the upstream project instead: https://github.com/ShaneIsrael/fireshare. This fork may diverge for experimentation and additional features.
+
 <!-- PROJECT LOGO -->
 <br />
 <p align="center">
-  <a href="https://github.com/ShaneIsrael/fireshare">
+  <a href="https://github.com/sim2kid/fireshare">
     <img src="app/client/src/assets/logo.png" alt="Logo" width="120" height="160">
   </a>
 
@@ -11,26 +14,24 @@
     Share your game clips, videos, or other media via unique links.
     <br />
     <br />
-    <a href="https://github.com/shaneisrael/fireshare/actions">
-      <img alt="Docker Build" src="https://github.com/shaneisrael/fireshare/actions/workflows/docker-publish-main.yml/badge.svg" />
+    <a href="https://github.com/sim2kid/fireshare/actions">
+      <img alt="Docker Build" src="https://github.com/sim2kid/fireshare/actions/workflows/docker-publish-main.yml/badge.svg" />
     </a>
-    <a href="https://hub.docker.com/r/shaneisrael/fireshare">
-      <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/shaneisrael/fireshare?label=docker%20pulls">
+    <a href="https://hub.docker.com/r/sim2kid/fireshare">
+      <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/sim2kid/fireshare?label=docker%20pulls">
     </a>
-    <a href="https://hub.docker.com/r/shaneisrael/fireshare/tags?page=1&ordering=last_updated">
-      <img alt="GitHub tag (latest SemVer)" src="https://img.shields.io/github/v/tag/shaneisrael/fireshare?label=version">
+    <a href="https://hub.docker.com/r/sim2kid/fireshare/tags?page=1&ordering=last_updated">
+      <img alt="GitHub tag (latest SemVer)" src="https://img.shields.io/github/v/tag/sim2kid/fireshare?label=version">
     </a>
-    <a href="https://github.com/shaneisrael/fireshare/stargazers">
-      <img alt="GitHub stars" src="https://img.shields.io/github/stars/shaneisrael/fireshare">
+    <a href="https://github.com/sim2kid/fireshare/stargazers">
+      <img alt="GitHub stars" src="https://img.shields.io/github/stars/sim2kid/fireshare">
     </a>
     <br />
     <br />
     <a href="https://v.fireshare.net">Live Demo</a>
     ·
-    <a href="https://github.com/ShaneIsrael/fireshare/issues">Report a Bug</a>
-    ·
-    <a href="https://www.paypal.com/paypalme/shaneisrael">Buy us a Coffee!</a>
-  </p>
+    <a href="https://github.com/sim2kid/fireshare/issues">Report a Bug</a>
+    </p>
 </p>
 
 <!-- TABLE OF CONTENTS -->
@@ -54,6 +55,7 @@
       <a href="#local-development">Local Development</a>
       <ul>
         <li><a href="#setup">Setup</a></li>
+        <li><a href="#docker-based-dev-optional">Docker-based Dev (optional)</a></li>
       </ul>
     </li>
     <li><a href="#contributing">Contributing</a></li>
@@ -174,7 +176,7 @@ docker-compose up -d
 ### Docker
 
 ```
-docker run --name fireshare -v $(pwd)/fireshare:/data:rw -v $(pwd)/fireshare_processed:/processed:rw -v /path/to/my_game_clips:/videos:rw -p 8080:80 -e ADMIN_PASSWORD=your-admin-password -d shaneisrael/fireshare:latest
+docker run --name fireshare -v $(pwd)/fireshare:/data:rw -v $(pwd)/fireshare_processed:/processed:rw -v /path/to/my_game_clips:/videos:rw -p 8080:80 -e ADMIN_PASSWORD=your-admin-password -d sim2kid/fireshare:latest
 ```
 
 Once running, navigate to `localhost:8080` in your browser.
@@ -269,7 +271,7 @@ docker exec -it fireshare fireshare transcode-videos --regenerate
 
 1. **Pull the latest image** (if using Docker):
    ```bash
-   docker pull shaneisrael/fireshare:latest
+   docker pull sim2kid/fireshare:latest
    ```
    
    Or if using docker-compose:
@@ -300,7 +302,7 @@ docker exec -it fireshare fireshare transcode-videos --regenerate
    
    Or with docker run:
    ```bash
-   docker run --name fireshare -v $(pwd)/fireshare:/data:rw -v $(pwd)/fireshare_processed:/processed:rw -v /path/to/videos:/videos:rw -p 8080:80 -e ADMIN_PASSWORD=your-password -e ENABLE_TRANSCODING=true -d shaneisrael/fireshare:latest
+   docker run --name fireshare -v $(pwd)/fireshare:/data:rw -v $(pwd)/fireshare_processed:/processed:rw -v /path/to/videos:/videos:rw -p 8080:80 -e ADMIN_PASSWORD=your-password -e ENABLE_TRANSCODING=true -d sim2kid/fireshare:latest
    ```
    
    **Note:** The database migration to add transcoding columns runs automatically on container startup via `flask db upgrade` in the entrypoint.
@@ -460,17 +462,27 @@ If you would like to run Fireshare via the source code in order to contribute yo
 1. Have Python3, NodeJS and NPM installed.
 2. Clone the repo
    ```sh
-   $ git clone https://github.com/ShaneIsrael/fireshare.git
+   $ git clone https://github.com/sim2kid/fireshare.git
    ```
 3. At the project root
    ```sh
    $ ./run_local.sh
    ```
 4. In a new terminal, navigate to `app/client` and run the following commands.
-   ```JS
+   ```sh
    $ npm i && npm start
    ```
 5. In your browser, navigate to `localhost:3000` and login with admin/admin
+
+### Docker-based Dev (optional)
+
+For a quick local development environment that matches the containerized runtime, you can use the provided docker-compose.dev.yml:
+
+```sh
+docker compose -f docker-compose.dev.yml up -d
+```
+
+Then open http://localhost:8080 and log in with the default admin credentials defined in the compose file (change them for your environment).
 
 <!-- CONTRIBUTING -->
 
@@ -478,10 +490,10 @@ If you would like to run Fireshare via the source code in order to contribute yo
 
 If this project is at all interesting to you please feel free to contribute or create suggestions if you have them. Please note that creating a pull request does not guarantee it will be accepted into the project. Outside of obvious bug fixes it may be best to consult with us before starting work on any additions you'd like to make.
 
-[For questions or feature requests please create an issue with an appropriate label here](https://github.com/ShaneIsrael/fireshare/issues/new)
+[For questions or feature requests please create an issue with an appropriate label here](https://github.com/sim2kid/fireshare/issues/new)
 
 1. Fork the Project
-2. Add upstream (`git remote add upstream https://github.com/ShaneIsrael/fireshare.git`)
+2. Add upstream (`git remote add upstream https://github.com/sim2kid/fireshare.git`)
 3. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
 4. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 5. Rebase with upstream (`git rebase upstream/main`)
@@ -499,46 +511,44 @@ If you need to update the database or add a new table / column first make your c
 
 ### Playback Issues
 
-If you are experiencing playback issues there could be a number of reasons as to why. These are the most common causes.
+If you are experiencing playback issues, here are the most common causes and how the new streaming pipeline addresses them:
 
-1. **File Size**
+1. Browser compatibility (Firefox vs. others)
 
-   Fireshare serves your videos as they are. If your videos are very large anybody trying to watch will need to have a fast enough download speed to play them back. This also means you will need to have an upload speed fast enough to serve your large files. Consider using a tool like Handbrake to compress your videos down to a smaller size.
+   This fork introduces a browser‑compatible MP4 streaming path with dynamic codec selection and on‑the‑fly transcoding, targeting reliable playback in Firefox while preserving direct‑play paths for Chrome/Edge/Safari when possible. The `/api/stream` endpoint negotiates codecs and may transcode on demand; when the source is already compatible it will stream without unnecessary work.
 
-2. **Upload Speed**
+   Tip: The player can now issue a `HEAD` request to `/api/stream` to quickly probe media headers; the server responds with `Content-Duration` to improve startup behavior and UI accuracy.
 
-   Your upload speed matters. If you have a slow upload speed, depending the file sizes that you are trying to serve it may not be possible for people to stream your videos. Consider compressing your videos with Handbrake.
+2. File size and bandwidth
 
-3. **Browsers**
+   Large source files still require sufficient server upload bandwidth and client download bandwidth. Transcoding to a more efficient or lower‑bitrate variant can help. The system avoids redundant work via caching and per‑output locking, so once a variant exists subsequent plays should start faster.
 
-   In my testing I have noticed that Firefox struggles to playback very large files, however Chome and Edge do not seem to have the same problem.
+3. Unsupported file types/containers
 
-4. **Unsupported File Type**
+   When a source container/codec is not natively playable in the requesting browser, the server will select a compatible output and transcode on the fly (copying audio/video when safe). This reduces the need to pre‑transcode your entire library. If a particular codec path failed previously for a given source, Fireshare will de‑prioritize that path for future attempts to improve reliability.
 
-   At the moment, Fireshare only supports file types and encodings that browsers can play natively, generally MP4, MOV and WEBM files. For example you could have h265 encoded videos work just fine and play in chrome, but not play at all in Firefox which wouldn't be a great experience for your viewers. It's reccommended to use MP4 encoded in h264 where possible since it is supported by virtually every browser at this time. If your video file does not play or causes errors you may need to transcode it to an h264 encoded MP4 with a tool like Handbrake.
+4. Upload issues behind reverse proxies
 
-5. **Upload Issues**
-
-   Uploading issues are often caused by putting fireshare behind some sort of reverse proxy like nginx. By default nginx has limits on how large your uploads can be. Often the issue is that your trying to upload a file larger than nginx allows. You'll need to update your reverse proxies settings to increase these limits and timeouts. If you are using nginx, you most likely just need to add these two lines.
+   If you place Fireshare behind Nginx or another reverse proxy, ensure upload size and timeouts are increased appropriately. For Nginx, for example:
 
    ```
    client_max_body_size 0;
    proxy_read_timeout 999999s;
    ```
 
-   These settings will only work on Nginx. With `client_max_body_size` set to `0` we are allowing any size upload. We are also increasing the timeout limit so that the connection isn't timedout. If you are not using nginx you'll need to do some research.
+   With `client_max_body_size` set to `0` any size upload is allowed. Increase timeouts to prevent long uploads from being cut off. Adjust similarly for non‑Nginx proxies.
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 
-[contributors-shield]: https://img.shields.io/github/contributors/ShaneIsrael/fireshare.svg?style=for-the-badge
-[contributors-url]: https://github.com/ShaneIsrael/fireshare/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/ShaneIsrael/fireshare.svg?style=for-the-badge
-[forks-url]: https://github.com/ShaneIsrael/fireshare/network/members
-[stars-shield]: https://img.shields.io/github/stars/ShaneIsrael/fireshare.svg?style=for-the-badge
-[stars-url]: https://github.com/ShaneIsrael/fireshare/stargazers
-[issues-shield]: https://img.shields.io/github/issues/ShaneIsrael/fireshare.svg?style=for-the-badge
-[issues-url]: https://github.com/ShaneIsrael/fireshare/issues
+[contributors-shield]: https://img.shields.io/github/contributors/sim2kid/fireshare.svg?style=for-the-badge
+[contributors-url]: https://github.com/sim2kid/fireshare/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/sim2kid/fireshare.svg?style=for-the-badge
+[forks-url]: https://github.com/sim2kid/fireshare/network/members
+[stars-shield]: https://img.shields.io/github/stars/sim2kid/fireshare.svg?style=for-the-badge
+[stars-url]: https://github.com/sim2kid/fireshare/stargazers
+[issues-shield]: https://img.shields.io/github/issues/sim2kid/fireshare.svg?style=for-the-badge
+[issues-url]: https://github.com/sim2kid/fireshare/issues
 [card-view]: .github/images/card-view.png
 [edit-details]: .github/images/edit-details.png
 [folders]: .github/images/folders.png

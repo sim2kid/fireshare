@@ -2,7 +2,7 @@ version: "3"
 services:
   fireshare:
     container_name: fireshare
-    image: shaneisrael/fireshare:latest
+    image: sim2kid/fireshare:latest
     ports:
       - "8080:80"
     volumes:
