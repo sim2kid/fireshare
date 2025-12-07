@@ -138,7 +138,10 @@ def build_streamable_mp4_command(src_path: Path, out_path: Path, target_codec: s
     elif target == 'AV1' and (vcodec in ('av1',)) and (acodec in ('aac', 'mp3', 'mp2')):
         already_ok = True
     if already_ok:
-        return base + ['-c:v', 'copy', '-c:a', 'aac'] + tail
+        # If audio is already AAC or MP3, copy it to avoid unnecessary transcoding
+        # MP2 in MP4 is less widely supported, so keep transcoding that to AAC
+        aopts = ['-c:a', 'copy'] if acodec in ('aac', 'mp3') else ['-c:a', 'aac']
+        return base + ['-c:v', 'copy'] + aopts + tail
 
     # Choose encoder mapping by target
     if target == 'H264':
