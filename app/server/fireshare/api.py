@@ -25,6 +25,25 @@ api = Blueprint('api', __name__, template_folder=templates_path)
 
 CORS(api, supports_credentials=True)
 
+# --- Simple in-memory rate limiter for /api/stream ---
+# Note: This is a best-effort protection primarily for public instances behind a single-process server.
+# For multi-process deployments, consider a shared store like Redis.
+_rate_limit_store = {}
+
+def _rate_limited(key: str, limit: int, window_s: int) -> bool:
+    """Return True if the key has exceeded the allowed request count in the window."""
+    now = time.time()
+    bucket = _rate_limit_store.get(key)
+    if not bucket:
+        _rate_limit_store[key] = [now]
+        return False
+    # prune old
+    cutoff = now - window_s
+    bucket = [t for t in bucket if t >= cutoff]
+    bucket.append(now)
+    _rate_limit_store[key] = bucket
+    return len(bucket) > limit
+
 def get_video_path(id, subid=None, quality=None):
     video = Video.query.filter_by(video_id=id).first()
     if not video:
@@ -577,6 +596,17 @@ def stream_video():
     quality = request.args.get('quality')
     subid = request.args.get('subid')
 
+    # Rate limiting (IP + video id key)
+    rl_enabled = bool(current_app.config.get('STREAM_RATE_LIMIT_ENABLED', True))
+    if rl_enabled and request.method == 'GET':
+        # defaults: 20 requests per 60s per IP+video (tunable)
+        rl_limit = int(current_app.config.get('STREAM_RATE_LIMIT_REQUESTS', 20))
+        rl_window = int(current_app.config.get('STREAM_RATE_LIMIT_WINDOW', 60))
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+        key = f"{ip}:{request.args.get('id','')}:stream"
+        if _rate_limited(key, rl_limit, rl_window):
+            return Response(status=429, response='Too Many Requests')
+
     # Resolve source path
     try:
         src_path = _Path(get_video_path(video_id, subid, quality if quality != 'original' else None))
@@ -626,6 +656,16 @@ def stream_video():
         resp = Response(data, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
         resp.headers.add('Content-Range', f'bytes {start}-{start + length - 1}/{file_size}')
         resp.headers.add('Accept-Ranges', 'bytes')
+        # Caching headers for already-derived static files
+        max_age = int(current_app.config.get('STREAM_CACHE_MAX_AGE', 3600))
+        resp.headers.add('Cache-Control', f'public, max-age={max_age}')
+        # Weak ETag based on size and mtime
+        try:
+            st = file_path.stat()
+            etag = f"W/\"{st.st_size}-{int(st.st_mtime)}\""
+            resp.headers.add('ETag', etag)
+        except Exception:
+            pass
         # Best-effort codec indicator for cached file:
         # 1) Infer from filename suffix patterns like "-stream-CODEC.mp4" or "-720p-CODEC.mp4"
         # 2) Fallback to probing the file with ffprobe to detect the actual video codec
@@ -731,6 +771,30 @@ def stream_video():
     except Exception:
         pass
 
+    # Opportunistic cleanup of stale partials and locks in the same derived directory
+    try:
+        cleanup_age = int(current_app.config.get('STREAM_CLEANUP_AGE_SECONDS', 3600))
+        min_partial_size = int(current_app.config.get('STREAM_CLEANUP_MIN_SIZE_BYTES', 1024 * 1024))
+        now_ts = time.time()
+        for p in derived_dir.glob(f"{video_id}-stream*.mp4"):
+            try:
+                st = p.stat()
+                if st.st_size < min_partial_size and (now_ts - st.st_mtime) > cleanup_age:
+                    current_app.logger.info(f"Cleaning stale partial stream file {p}")
+                    p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        for p in derived_dir.glob(f"{video_id}-*.lock"):
+            try:
+                st = p.stat()
+                if (now_ts - st.st_mtime) > cleanup_age:
+                    current_app.logger.info(f"Cleaning stale lock file {p}")
+                    p.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # Simple per-output lock to avoid concurrent ffmpeg processes writing the same file
     lock_path = _Path(str(out_path) + '.lock')
 
@@ -802,6 +866,46 @@ def stream_video():
 
         import threading as _threading
         _threading.Thread(target=_wait_and_cleanup, args=(proc,), daemon=True).start()
+
+        # Watchdog to enforce total timeout and inactivity timeout
+        def _watchdog(p, watched_path: _Path):
+            base_timeout = int(current_app.config.get('TRANSCODE_TIMEOUT', 7200))
+            inactivity_timeout = int(current_app.config.get('TRANSCODE_INACTIVITY_TIMEOUT', 120))
+            last_size = watched_path.stat().st_size if watched_path.exists() else 0
+            start_ts = time.time()
+            last_change = start_ts
+            while True:
+                if p.poll() is not None:
+                    return
+                now = time.time()
+                # total runtime limit
+                if now - start_ts > base_timeout:
+                    try:
+                        current_app.logger.warning(f"Killing ffmpeg for {video_id} due to timeout ({base_timeout}s)")
+                        p.kill()
+                    except Exception:
+                        pass
+                    return
+                # inactivity limit (no file growth)
+                try:
+                    if watched_path.exists():
+                        size_now = watched_path.stat().st_size
+                        if size_now > last_size:
+                            last_size = size_now
+                            last_change = now
+                        elif now - last_change > inactivity_timeout:
+                            current_app.logger.warning(f"Killing ffmpeg for {video_id} due to inactivity > {inactivity_timeout}s")
+                            try:
+                                p.kill()
+                            except Exception:
+                                pass
+                            return
+                except Exception:
+                    # Ignore probing errors
+                    pass
+                time.sleep(1.0)
+
+        _threading.Thread(target=_watchdog, args=(proc, out_path), daemon=True).start()
     else:
         current_app.logger.info(f"Another process is already transcoding {out_path}. Streaming the growing file.")
 
