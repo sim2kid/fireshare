@@ -248,6 +248,8 @@ const VideoJSPlayer = ({
         if (originalDurationRef.current) {
           try { player.duration = originalDurationRef.current } catch (e) {}
           originalDurationRef.current = null
+          // Notify any listeners/UI that duration has been restored
+          try { player.trigger('durationchange') } catch (e) {}
         }
         player.dispose()
         playerRef.current = null
