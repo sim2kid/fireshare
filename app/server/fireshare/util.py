@@ -7,6 +7,7 @@ from fireshare import logger
 import time
 import glob
 import re
+from typing import Optional, Set
 
 def lock_exists(path: Path):
     """
@@ -91,12 +92,38 @@ def _probe_codecs(src_path: Path):
         logger.debug(f'Codec probe failed: {ex}')
         return None, None
 
-def _encoder_available(encoder_name: str) -> bool:
-    """Check if a given ffmpeg encoder is available."""
+# Cache of available encoders to avoid expensive ffmpeg probing per request
+_ENCODERS_CACHE: Optional[Set[str]] = None
+
+def _load_encoders_cache() -> Set[str]:
+    global _ENCODERS_CACHE
+    if _ENCODERS_CACHE is not None:
+        return _ENCODERS_CACHE
+    encoders: Set[str] = set()
     try:
         out = sp.check_output(['ffmpeg', '-hide_banner', '-encoders'], stderr=sp.STDOUT).decode('utf-8', errors='ignore')
-        # each encoder line typically contains the encoder name surrounded by spaces
-        return re.search(rf"\b{re.escape(encoder_name)}\b", out) is not None
+        # Lines that list encoders typically look like:
+        #  V..... h264_nvenc           NVIDIA NVENC H.264 encoder
+        #  A..... aac                  AAC (Advanced Audio Coding) encoder
+        for line in out.splitlines():
+            # Skip headers and empty lines
+            if not line or line.lstrip().startswith(('Encoders', '------')):
+                continue
+            # Match patterns with capability flags, whitespace, then the encoder name
+            m = re.match(r"\s*[AVFS.]+\s+([0-9A-Za-z_\-]+)\b", line)
+            if m:
+                encoders.add(m.group(1))
+    except Exception as ex:
+        logger.debug(f"Failed to load ffmpeg encoders list: {ex}")
+        encoders = set()
+    _ENCODERS_CACHE = encoders
+    return _ENCODERS_CACHE
+
+def _encoder_available(encoder_name: str) -> bool:
+    """Check if a given ffmpeg encoder is available, cached for process lifetime."""
+    try:
+        encoders = _load_encoders_cache()
+        return encoder_name in encoders
     except Exception:
         return False
 
