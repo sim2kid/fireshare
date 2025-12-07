@@ -19,7 +19,7 @@ def send_discord_webhook(webhook_url=None, video_url=None):
     payload = {
         "content": video_url,
         "username": "Fireshare",
-        "avatar_url": "https://github.com/ShaneIsrael/fireshare/raw/develop/app/client/src/assets/logo_square.png",
+        "avatar_url": "https://github.com/sim2kid/fireshare/raw/develop/app/client/src/assets/logo_square.png",
     }
 
     try:
@@ -41,7 +41,7 @@ def get_public_watch_url(video_id, config, host):
         return f"{host}/w/{video_id}"
     else:
         return print("--Unable to post to Discord--\nPlease check that your DOMAIN env variable is set correctly or that you have a shareable link domain set in your Admin settings.")
-    
+
 @click.group()
 def cli():
     pass
@@ -76,18 +76,18 @@ def scan_videos(root):
         video_config = config["app_config"]["video_defaults"]
         discord_webhook_url = config["integrations"]["discord_webhook_url"]
         config_file.close()
-        
+
         if not video_links.is_dir():
             video_links.mkdir()
 
         logger.info(f"Scanning {str(videos_path)} for {', '.join(SUPPORTED_FILE_EXTENSIONS)} video files")
         CHUNK_FILE_PATTERN = re.compile(r'\.part\d{4}$')
         TRANSCODE_PATTERN = re.compile(r'-(?:720p|1080p)\.mp4$', re.IGNORECASE)
-        
+
         # Collect all video files and filter out transcoded versions
-        all_files = [f for f in (videos_path / root if root else videos_path).glob('**/*') 
+        all_files = [f for f in (videos_path / root if root else videos_path).glob('**/*')
                      if f.is_file() and f.suffix.lower() in SUPPORTED_FILE_EXTENSIONS]
-        
+
         video_files = []
         skipped_count = 0
         for f in all_files:
@@ -98,15 +98,15 @@ def scan_videos(root):
                 skipped_count += 1
             else:
                 video_files.append(f)
-        
+
         if skipped_count > 0:
             logger.info(f"Skipped {skipped_count} transcoded video file(s)")
-        
+
         video_rows = Video.query.all()
 
         new_videos = []
         for vf in video_files:
-            path = str(vf.relative_to(videos_path)) 
+            path = str(vf.relative_to(videos_path))
             video_id = util.video_id(vf)
             existing = next((vr for vr in video_rows if vr.video_id == video_id), None)
             duplicate = next((dvr for dvr in new_videos if dvr.video_id == video_id), None)
@@ -130,7 +130,7 @@ def scan_videos(root):
                 v = Video(video_id=video_id, extension=vf.suffix, path=path, available=True, created_at=created_at, updated_at=updated_at)
                 logger.info(f"Adding new Video {video_id} at {str(path)} (created {created_at.isoformat()}, updated {updated_at.isoformat()})")
                 new_videos.append(v)
-        
+
         if new_videos:
             db.session.add_all(new_videos)
         else:
@@ -184,34 +184,34 @@ def scan_video(ctx, path):
             thumbnail_skip = thumbnail_skip / 100
         else:
             thumbnail_skip = 0
-        
+
         config_file = open(paths["data"] / "config.json")
         config = json.load(config_file)
         video_config = config["app_config"]["video_defaults"]
         discord_webhook_url = config["integrations"]["discord_webhook_url"]
 
         config_file.close()
-        
+
         if not video_links.is_dir():
             video_links.mkdir()
-        
+
         CHUNK_FILE_PATTERN = re.compile(r'\.part\d{4}$')
         TRANSCODE_PATTERN = re.compile(r'-(?:720p|1080p)\.mp4$', re.IGNORECASE)
-        
+
         # Check if the file is a transcoded version and skip it
         if (videos_path / path).is_file() and TRANSCODE_PATTERN.search((videos_path / path).name):
             logger.warning(f"Skipping transcoded file: {path}. Transcoded files should not be scanned.")
             return
-        
-        video_file = ((videos_path / path) if (videos_path / path).is_file() 
-                     and (videos_path / path).suffix.lower() in SUPPORTED_FILE_EXTENSIONS 
+
+        video_file = ((videos_path / path) if (videos_path / path).is_file()
+                     and (videos_path / path).suffix.lower() in SUPPORTED_FILE_EXTENSIONS
                      and not CHUNK_FILE_PATTERN.search((videos_path / path).name)
                      and not TRANSCODE_PATTERN.search((videos_path / path).name) else None)
         if video_file:
             video_rows = Video.query.all()
             logger.info(f"Scanning {str(video_file)}")
 
-            path = str(video_file.relative_to(videos_path)) 
+            path = str(video_file.relative_to(videos_path))
             video_id = util.video_id(video_file)
             existing = next((vr for vr in video_rows if vr.video_id == video_id), None)
             if existing:
@@ -258,7 +258,7 @@ def scan_video(ctx, path):
                 derived_path = Path(processed_root, "derived", info.video_id)
                 video_path = Path(processed_root, "video_links", info.video_id + video_file.suffix)
                 if video_path.exists():
-                    
+
                     poster_path = Path(derived_path, "poster.jpg")
                     should_create_poster = (not poster_path.exists() or regenerate)
                     if should_create_poster:
@@ -269,7 +269,7 @@ def scan_video(ctx, path):
                     else:
                         logger.debug(f"Skipping creation of poster for video {info.video_id} because it exists at {str(poster_path)}")
                     db.session.commit()
-                    
+
                     if discord_webhook_url:
                         logger.info(f"Posting to Discord webhook")
                         video_url = get_public_watch_url(video_id, config, domain)
@@ -325,7 +325,7 @@ def sync_metadata(video):
                         logger.warning(f"For more info and to find the offending file, run this command in your container: \"stat {vpath}\"")
                         logger.warning("I'll try to process this file again in 60 seconds...")
                         time.sleep(60)
-                
+
                 corruptVideoWarning = "There may be a corrupt video in your video Directory. See your logs for more info!"
                 if corruptVideoWarning in current_app.config['WARNINGS']:
                     position = current_app.config['WARNINGS'].index(corruptVideoWarning)
@@ -384,7 +384,7 @@ def create_web_videos():
 
             else:
                 logger.warning(f"Missing or invalid symlink at {vpath} to video {v.video_id} (original location: {v.video.path})")
-        
+
 
 @cli.command()
 @click.option("--regenerate", "-r", help="Overwrite existing posters", is_flag=True)
@@ -440,29 +440,29 @@ def transcode_videos(regenerate, video):
         if not current_app.config.get('ENABLE_TRANSCODING'):
             logger.info("Transcoding is disabled. Set ENABLE_TRANSCODING=true to enable.")
             return
-        
+
         processed_root = Path(current_app.config['PROCESSED_DIRECTORY'])
         use_gpu = current_app.config.get('TRANSCODE_GPU', False)
         base_timeout = current_app.config.get('TRANSCODE_TIMEOUT', 7200)
-        
+
         # Get videos to transcode
         vinfos = VideoInfo.query.filter(VideoInfo.video_id==video).all() if video else VideoInfo.query.all()
         logger.info(f'Processing {len(vinfos):,} videos for transcoding (GPU: {use_gpu}, Base timeout: {base_timeout}s)')
-        
+
         for vi in vinfos:
             derived_path = Path(processed_root, "derived", vi.video_id)
             video_path = Path(processed_root, "video_links", vi.video_id + vi.video.extension)
-            
+
             if not video_path.exists():
                 logger.warning(f"Skipping transcoding for video {vi.video_id} because the video at {str(video_path)} does not exist")
                 continue
-            
+
             if not derived_path.exists():
                 derived_path.mkdir(parents=True)
-            
+
             # Determine which qualities to transcode
             original_height = vi.height or 0
-            
+
             # Transcode to 1080p if original is higher and 1080p doesn't exist
             transcode_1080p_path = derived_path / f"{vi.video_id}-1080p.mp4"
             if original_height > 1080 and (not transcode_1080p_path.exists() or regenerate):
@@ -481,7 +481,7 @@ def transcode_videos(regenerate, video):
                 vi.has_1080p = True
                 db.session.add(vi)
                 db.session.commit()
-            
+
             # Transcode to 720p if original is higher than 720p and 720p doesn't exist
             transcode_720p_path = derived_path / f"{vi.video_id}-720p.mp4"
             if original_height > 720 and (not transcode_720p_path.exists() or regenerate):
@@ -500,7 +500,7 @@ def transcode_videos(regenerate, video):
                 vi.has_720p = True
                 db.session.add(vi)
                 db.session.commit()
-        
+
         logger.info("Transcoding complete")
 
 @cli.command()
@@ -513,7 +513,7 @@ def bulk_import(ctx, root):
             logger.info(f"A scan process is currently active... Aborting. (Remove {paths['data']/'fireshare.lock'} to continue anyway)")
             return
         util.create_lock(paths["data"])
-        
+
         thumbnail_skip = current_app.config['THUMBNAIL_VIDEO_LOCATION'] or 0
         if thumbnail_skip > 0 and thumbnail_skip <= 100:
             thumbnail_skip = thumbnail_skip / 100
@@ -530,7 +530,7 @@ def bulk_import(ctx, root):
         s = time.time()
         ctx.invoke(create_posters, skip=thumbnail_skip)
         timing['create_posters'] = time.time() - s
-        
+
         # Transcode videos if transcoding is enabled
         if current_app.config.get('ENABLE_TRANSCODING'):
             s = time.time()

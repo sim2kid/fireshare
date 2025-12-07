@@ -332,8 +332,8 @@ function Navbar20({
         <Divider />
 
 
-       
-       
+
+
         {folderSize !== null ? (
           open ? (
             <Box
@@ -405,7 +405,7 @@ function Navbar20({
                 </Typography>
               </Box>
             </Tooltip>
-            
+
           )
         ) : (
           <Box
@@ -423,7 +423,7 @@ function Navbar20({
               fontSize: 13,
             }}
           >
-            
+
             {open ? <Typography variant="body2" color="textSecondary">Loading Disk Usage...</Typography> : <SyncIcon
               sx={{
                 animation: "spin 2s linear infinite",
@@ -438,7 +438,7 @@ function Navbar20({
               }}
             /> }
           </Box>
-          
+
         )}
 
 
@@ -456,7 +456,7 @@ function Navbar20({
                 cursor: 'pointer',
               },
             }}
-            onClick={() => window.open('https://github.com/ShaneIsrael/fireshare', '_blank')}
+            onClick={() => window.open('https://github.com/sim2kid/fireshare', '_blank')}
           >
             <Grid container alignItems="center" sx={{ height: '100%' }}>
               <Grid item sx={{ ml: 1, mr: 1 }}>
@@ -484,23 +484,10 @@ function Navbar20({
                     sx={{ p: 0.5, mr: 1, pointerEvents: 'all' }}
                     onClick={(e) => {
                       e.stopPropagation()
-                      window.open('https://github.com/ShaneIsrael/fireshare/issues', '_blank')
+                      window.open('https://github.com/sim2kid/fireshare/issues', '_blank')
                     }}
                   >
                     <BugReportIcon fontSize="inherit" />
-                  </IconButton>
-                </LightTooltip>
-                <LightTooltip arrow title="Buy us a coffee!">
-                  <IconButton
-                    aria-label="paypal-link"
-                    size="medium"
-                    sx={{ p: 0.5, pointerEvents: 'all' }}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      window.open('https://www.paypal.com/paypalme/shaneisrael', '_blank')
-                    }}
-                  >
-                    <VolunteerActivismIcon fontSize="inherit" />
                   </IconButton>
                 </LightTooltip>
               </Grid>
@@ -522,7 +509,7 @@ function Navbar20({
             }}
             justifyContent="center"
             alignItems="center"
-            onClick={() => window.open('https://github.com/ShaneIsrael/fireshare', '_blank')}
+            onClick={() => window.open('https://github.com/sim2kid/fireshare', '_blank')}
           >
             <IconButton aria-label="report-bug-link" sx={{ p: 0.5, pointerEvents: 'all' }}>
               <GitHubIcon sx={{ color: '#EBEBEB' }} />

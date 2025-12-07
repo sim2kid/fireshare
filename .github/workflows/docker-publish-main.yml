@@ -16,7 +16,7 @@ on:
         default: "latest"
 
 env:
-  REGISTRY_IMAGE: shaneisrael/fireshare
+  REGISTRY_IMAGE: sim2kid/fireshare
 
 jobs:
   build:

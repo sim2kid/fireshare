@@ -270,7 +270,7 @@ const Navbar = ({ children, options = [], pages = [], feedView = false, authenti
                 aria-label="report-bug-link"
                 size="medium"
                 sx={{ p: 0.5, pointerEvents: 'all' }}
-                onClick={() => window.open('https://github.com/ShaneIsrael/fireshare/issues', '_blank')}
+                onClick={() => window.open('https://github.com/sim2kid/fireshare/issues', '_blank')}
               >
                 <BugReportIcon fontSize="inherit" />
               </IconButton>
@@ -280,7 +280,7 @@ const Navbar = ({ children, options = [], pages = [], feedView = false, authenti
                 aria-label="github-link"
                 size="medium"
                 sx={{ p: 0.5, pointerEvents: 'all' }}
-                onClick={() => window.open('https://github.com/ShaneIsrael/fireshare', '_blank')}
+                onClick={() => window.open('https://github.com/sim2kid/fireshare', '_blank')}
               >
                 <GitHubIcon fontSize="inherit" />
               </IconButton>

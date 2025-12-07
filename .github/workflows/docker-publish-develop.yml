@@ -40,7 +40,7 @@ jobs:
           context: .
           push: true
           file: Dockerfile
-          tags: shaneisrael/fireshare:develop
+          tags: sim2kid/fireshare:develop
 
   manual_push_to_registry:
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -64,4 +64,4 @@ jobs:
           context: .
           push: true
           file: Dockerfile
-          tags: shaneisrael/fireshare:${{ github.event.inputs.tag }}
+          tags: sim2kid/fireshare:${{ github.event.inputs.tag }}
