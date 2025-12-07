@@ -45,10 +45,8 @@ export const useDebounce = (value, delay) => {
   return debouncedValue
 }
 
-export const getSettings = () => localStorage.getItem('config') && JSON.parse(localStorage.getItem('config'))
 export const getSetting = (setting) =>
   localStorage.getItem('config') && JSON.parse(localStorage.getItem('config'))[setting]
-export const setSettings = (settings) => localStorage.setItem('config', JSON.stringify(settings))
 export const setSetting = (setting, value) => {
   if (localStorage.getItem('config')) {
     const settings = JSON.parse(localStorage.getItem('config'))
@@ -76,7 +74,6 @@ export const copyToClipboard = (textToCopy) => {
     // navigator clipboard api method'
     return navigator.clipboard.writeText(textToCopy)
   } else {
-    console.log('test')
     // text area method
     let textArea = document.createElement('textarea')
     textArea.value = textToCopy
