@@ -45,10 +45,8 @@ export const useDebounce = (value, delay) => {
   return debouncedValue
 }
 
-export const getSettings = () => localStorage.getItem('config') && JSON.parse(localStorage.getItem('config'))
 export const getSetting = (setting) =>
   localStorage.getItem('config') && JSON.parse(localStorage.getItem('config'))[setting]
-export const setSettings = (settings) => localStorage.setItem('config', JSON.stringify(settings))
 export const setSetting = (setting, value) => {
   if (localStorage.getItem('config')) {
     const settings = JSON.parse(localStorage.getItem('config'))
@@ -76,7 +74,6 @@ export const copyToClipboard = (textToCopy) => {
     // navigator clipboard api method'
     return navigator.clipboard.writeText(textToCopy)
   } else {
-    console.log('test')
     // text area method
     let textArea = document.createElement('textarea')
     textArea.value = textToCopy
@@ -105,20 +102,26 @@ export const copyToClipboard = (textToCopy) => {
 export const getVideoUrl = (videoId, quality, extension) => {
   const URL = getUrl()
   const SERVED_BY = getServedBy()
-  
+  const codecs = getClientSupportedCodecs(videoId).join(',')
+
   if (quality === '720p' || quality === '1080p') {
     if (SERVED_BY === 'nginx') {
       return `${URL}/_content/derived/${videoId}/${videoId}-${quality}.mp4`
     }
-    return `${URL}/api/video?id=${videoId}&quality=${quality}`
+    // Use new ffmpeg-backed streaming endpoint
+    return `${URL}/api/stream?id=${videoId}&quality=${quality}&codecs=${encodeURIComponent(codecs)}&codec_try=0`
   }
-  
+
   // Original quality
   if (SERVED_BY === 'nginx') {
     const videoPath = getVideoPath(videoId, extension)
     return `${URL}/_content/video/${videoPath}`
   }
-  return `${URL}/api/video?id=${extension === '.mkv' ? `${videoId}&subid=1` : videoId}`
+  // Use new ffmpeg-backed streaming endpoint for original
+  if (extension === '.mkv') {
+    return `${URL}/api/stream?id=${videoId}&subid=1&codecs=${encodeURIComponent(codecs)}&codec_try=0`
+  }
+  return `${URL}/api/stream?id=${videoId}&codecs=${encodeURIComponent(codecs)}&codec_try=0`
 }
 
 /**
@@ -131,10 +134,10 @@ export const getVideoUrl = (videoId, quality, extension) => {
  */
 export const getVideoSources = (videoId, videoInfo, extension) => {
   const sources = []
-  
+
   const has720p = videoInfo?.has_720p
   const has1080p = videoInfo?.has_1080p
-  
+
   // Add 720p
   if (has720p) {
     sources.push({
@@ -143,7 +146,7 @@ export const getVideoSources = (videoId, videoInfo, extension) => {
       label: '720p',
     })
   }
-  
+
   // Add 1080p
   if (has1080p) {
     sources.push({
@@ -162,4 +165,61 @@ export const getVideoSources = (videoId, videoInfo, extension) => {
   })
 
   return sources
+}
+
+// Read per-video failed codecs persisted in sessionStorage by VideoJSPlayer error handler
+const getFailedCodecsForVideo = (videoId) => {
+  try {
+    if (!videoId) return []
+    const raw = sessionStorage.getItem(`fs_failed_codecs_${videoId}`)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed
+    return []
+  } catch {
+    return []
+  }
+}
+
+// Determine client-supported codecs in preference order (full list; H264 always included)
+export const getClientSupportedCodecs = (videoId = undefined) => {
+  const video = document.createElement('video')
+  if (!video || typeof video.canPlayType !== 'function') {
+    return ['H264']
+  }
+  const candidates = [
+    { name: 'H264', type: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"' },
+    { name: 'AV1', type: 'video/mp4; codecs="av01.0.05M.08, mp4a.40.2"' },
+    { name: 'VP9', type: 'video/webm; codecs="vp9, opus"' },
+    { name: 'VP8', type: 'video/webm; codecs="vp8, vorbis"' },
+    { name: 'HEVC', type: 'video/mp4; codecs="hvc1.1.6.L93.B0"' },
+    { name: 'MPEG4', type: 'video/mp4; codecs="mp4v.20.9"' },
+    { name: 'MPEG2', type: 'video/mp2t' },
+  ]
+  // Rank by canPlayType result: probably > maybe > ''
+  const ranked = candidates
+    .map(c => ({
+      name: c.name,
+      support: video.canPlayType(c.type) || ''
+    }))
+    .filter(c => c.support && c.support.length > 0)
+    .sort((a, b) => {
+      const score = v => (v.support === 'probably' ? 2 : v.support === 'maybe' ? 1 : 0)
+      return score(b) - score(a)
+    })
+    .map(c => c.name)
+
+  // Always ensure H264 is present as a safe fallback
+  const out = []
+  ranked.forEach(n => { if (!out.includes(n)) out.push(n) })
+  if (!out.includes('H264')) out.push('H264')
+
+  // If we have prior failures for this video, move those codecs to the end (deprioritize)
+  const failed = getFailedCodecsForVideo(videoId).map(n => String(n).toUpperCase())
+  if (failed.length) {
+    const keep = out.filter(n => !failed.includes(String(n).toUpperCase()))
+    const moved = out.filter(n => failed.includes(String(n).toUpperCase()))
+    return [...keep, ...moved]
+  }
+  return out
 }

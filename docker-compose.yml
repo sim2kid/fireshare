@@ -24,6 +24,10 @@ services:
       - ENABLE_TRANSCODING=false
       # Enable GPU acceleration for transcoding using NVENC (requires nvidia-docker runtime, default: false)
       - TRANSCODE_GPU=false
+      # Whitelist of server-side video codecs allowed for transcoding (comma-separated, logical names)
+      # Supported: H264, HEVC, MPEG2, MPEG4, VC1, VP8, VP9, AV1
+      # By default only H264 is enabled; list others as needed
+      - TRANSCODE_VIDEO_CODECS=H264
       # Required for GPU transcoding - enables NVIDIA driver capabilities
       # - NVIDIA_DRIVER_CAPABILITIES=all
     # Uncomment the following lines to enable GPU passthrough for transcoding
