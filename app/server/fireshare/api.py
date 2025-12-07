@@ -560,132 +560,107 @@ def _select_encoder_from_preferences(preferences, whitelist, use_gpu):
 @api.route('/api/stream')
 def stream_video():
     """
-    New streaming endpoint that pipes video through ffmpeg for fragmented MP4 chunked streaming.
+    Stream a browser-compatible MP4 (H.264/AAC) version of the requested video.
 
-    Query params:
-      - id: video id (required)
-      - subid: optional subtitle id (for historical mkv handling; currently unused for mapping)
-      - quality: optional quality variant ('720p'|'1080p'|'original'); if provided and exists, used as input
-      - vcodec, acodec: optional future params to specify codecs. Defaults to 'copy' (stream copy)
+    This endpoint will:
+      - Determine the source video path (original or quality variant)
+      - If a cached, compatible MP4 exists, stream it with range support
+      - Otherwise, start an ffmpeg transcode to a derived MP4 using fragmented MP4 flags
+        and stream the file progressively as it is written (suitable for Firefox)
     """
-    from .util import get_media_info, get_video_duration
+    from pathlib import Path as _Path
+    from .util import build_streamable_mp4_command
 
     video_id = request.args.get('id')
     if not video_id:
         return Response(status=400, response='Missing required parameter: id')
-    subid = request.args.get('subid')
     quality = request.args.get('quality')
-    vcodec = request.args.get('vcodec', 'copy')
-    acodec = request.args.get('acodec', 'copy')
-    codecs_csv = request.args.get('codecs')  # client-supported logical codecs, CSV
-    codec_try = int(request.args.get('codec_try', '0') or 0)
+    subid = request.args.get('subid')
 
-    # Resolve input path (re-uses existing logic and quality fallback)
+    # Resolve source path
     try:
-        input_path = get_video_path(video_id, subid, quality if quality != 'original' else None)
+        src_path = _Path(get_video_path(video_id, subid, quality if quality != 'original' else None))
     except Exception as ex:
         return Response(status=404, response=str(ex))
 
-    # Probe media to determine first video/audio streams (kept simple for now)
-    streams = get_media_info(input_path) or []
-    v_map = '0:v:0'
-    a_map = '0:a:0'
-    has_audio = any(s.get('codec_type') == 'audio' for s in streams)
+    # Prepare output/cached path
+    paths = current_app.config['PATHS']
+    derived_dir = _Path(paths['processed']) / 'derived' / video_id
+    derived_dir.mkdir(parents=True, exist_ok=True)
+    out_path = derived_dir / f"{video_id}-stream.mp4"
 
-    # Decide codec if transcoding is enabled and client provided preferences
-    enable_transcoding = current_app.config.get('ENABLE_TRANSCODING', False)
-    use_gpu = current_app.config.get('TRANSCODE_GPU', False)
-    whitelist = current_app.config.get('VIDEO_CODEC_WHITELIST', ['H264'])
+    # If there is already a derived quality-specific mp4, prefer it
+    preferred_mp4 = None
+    if quality in ('720p', '1080p'):
+        candidate = derived_dir / f"{video_id}-{quality}.mp4"
+        if candidate.exists():
+            preferred_mp4 = candidate
+    if preferred_mp4 is None and out_path.exists():
+        preferred_mp4 = out_path
 
-    if enable_transcoding and codecs_csv:
-        prefs = [p.strip().upper() for p in codecs_csv.split(',') if p.strip()]
-        # Rotate based on codec_try index (try next preferred)
-        if 0 <= codec_try < len(prefs):
-            prefs = prefs[codec_try:]
-        selected_encoder, logical = _select_encoder_from_preferences(prefs, whitelist, use_gpu)
-        if selected_encoder:
-            vcodec = selected_encoder
-            current_app.logger.info(f"Streaming {video_id} using transcoded codec {logical} ({vcodec}) [try #{codec_try+1}]")
-        else:
-            current_app.logger.info("No matching codec between client preferences and whitelist; falling back to copy")
+    def _stream_file_with_range(file_path: _Path):
+        """Serve an existing file with range support."""
+        file_size = file_path.stat().st_size
+        start = 0
+        end = file_size - 1
+        range_header = request.headers.get('Range', None)
+        if range_header:
+            m = re.search('bytes=(\\d+)-(\\d*)', range_header)
+            if m:
+                g = m.groups()
+                if g[0]:
+                    start = int(g[0])
+                if g[1]:
+                    end = int(g[1])
+        length = max(0, end - start + 1)
+        with open(file_path, 'rb') as f:
+            f.seek(start)
+            data = f.read(length)
+        resp = Response(data, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
+        resp.headers.add('Content-Range', f'bytes {start}-{start + length - 1}/{file_size}')
+        resp.headers.add('Accept-Ranges', 'bytes')
+        return resp
 
-    # Build ffmpeg command
-    # Use fragmented MP4 suitable for HTTP chunked transfer
-    cmd = [
-        'ffmpeg', '-v', 'error', '-nostdin',
-        '-i', str(input_path),
-        '-map', v_map,
-    ]
-    if has_audio:
-        cmd += ['-map', a_map]
-    # Set codecs (default copy to preserve original)
-    cmd += ['-c:v', vcodec]
-    if has_audio:
-        # Prefer AAC for widest support if we are transcoding video
-        if vcodec != 'copy' and acodec == 'copy':
-            cmd += ['-c:a', 'aac']
-        else:
-            cmd += ['-c:a', acodec]
-    # Faststart + fragmented for streaming
-    cmd += [
-        '-movflags', '+frag_keyframe+empty_moov+faststart',
-        '-f', 'mp4',
-        'pipe:1'
-    ]
+    # If we already have a playable mp4, serve it with range support
+    if preferred_mp4 and preferred_mp4.exists():
+        return _stream_file_with_range(preferred_mp4)
 
-    current_app.logger.debug(f"$ {' '.join(cmd)}")
-
+    # Otherwise, begin (re)mux/transcode to out_path and stream progressively
     try:
-        process = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE, bufsize=0)
-    except FileNotFoundError:
-        return Response(status=500, response='ffmpeg not found on server')
+        # Ensure any previous partial is removed to avoid stale tails
+        if out_path.exists() and out_path.stat().st_size < 1024:
+            out_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Build an ffmpeg command: remux if already H.264/AAC; else transcode
+    cmd = build_streamable_mp4_command(src_path, out_path)
+    current_app.logger.info(f"Starting on-the-fly transcode for {video_id}: {' '.join(cmd)}")
+    proc = Popen(cmd)
 
     def generate():
-        try:
+        chunk_size = 1024 * 256  # 256KB
+        # Wait for file to appear
+        while not out_path.exists():
+            time.sleep(0.1)
+        with open(out_path, 'rb') as f:
             while True:
-                chunk = process.stdout.read(64 * 1024)
-                if not chunk:
+                data = f.read(chunk_size)
+                if data:
+                    yield data
+                else:
+                    # If ffmpeg still running, wait for more data
+                    if proc.poll() is None:
+                        time.sleep(0.2)
+                        continue
+                    # ffmpeg finished and no more data
                     break
-                yield chunk
-        finally:
-            # Ensure process is terminated if client disconnects
-            try:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=2)
-                    except Exception:
-                        process.kill()
-            except Exception:
-                pass
 
-    # Try to compute final duration of the input so the player can display it even for fragmented streams
-    stream_duration = None
-    try:
-        stream_duration = get_video_duration(input_path)
-    except Exception:
-        stream_duration = None
-
+    # For progressive streaming we cannot provide Content-Length up-front; return 200 with chunked transfer
     headers = {
         'Content-Type': 'video/mp4',
-        # Disable caching for dynamic streams
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
+        'Cache-Control': 'no-cache'
     }
-
-    # Provide duration hints for players that support it
-    if stream_duration and stream_duration > 0:
-        # Non-standard but widely used header
-        headers['X-Content-Duration'] = str(stream_duration)
-        # RFC 7826 (RTSP) and sometimes honored by browsers for media
-        headers['Content-Duration'] = str(stream_duration)
-
-    # Communicate transcoding capability to the client
-    headers['X-Transcoding-Enabled'] = 'true' if enable_transcoding else 'false'
-
-    # Expose headers to browsers for CORS requests
-    headers['Access-Control-Expose-Headers'] = 'X-Content-Duration, Content-Duration, X-Transcoding-Enabled'
-
     return Response(generate(), headers=headers)
 
 @api.route('/api/transcoding/enabled')

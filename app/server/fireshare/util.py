@@ -6,6 +6,7 @@ import xxhash
 from fireshare import logger
 import time
 import glob
+import re
 
 def lock_exists(path: Path):
     """
@@ -54,10 +55,10 @@ def get_media_info(path):
 def get_video_duration(path):
     """
     Get the duration of a video file in seconds.
-    
+
     Args:
         path: Path to the video file
-    
+
     Returns:
         float: Duration in seconds, or None if unable to determine
     """
@@ -71,24 +72,84 @@ def get_video_duration(path):
         logger.debug(f'Could not extract video duration: {ex}')
     return None
 
+# --- Streaming/transcoding helpers (re-introduced for Firefox progressive support) ---
+def _probe_codecs(src_path: Path):
+    """Return (vcodec, acodec) for first video/audio streams using ffprobe."""
+    try:
+        cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', str(src_path)]
+        logger.debug(f"$ {' '.join(cmd)}")
+        data = json.loads(sp.check_output(cmd).decode('utf-8'))
+        vcodec = None
+        acodec = None
+        for s in data.get('streams', []):
+            if s.get('codec_type') == 'video' and not vcodec:
+                vcodec = s.get('codec_name')
+            if s.get('codec_type') == 'audio' and not acodec:
+                acodec = s.get('codec_name')
+        return vcodec, acodec
+    except Exception as ex:
+        logger.debug(f'Codec probe failed: {ex}')
+        return None, None
+
+def _encoder_available(encoder_name: str) -> bool:
+    """Check if a given ffmpeg encoder is available."""
+    try:
+        out = sp.check_output(['ffmpeg', '-hide_banner', '-encoders'], stderr=sp.STDOUT).decode('utf-8', errors='ignore')
+        # each encoder line typically contains the encoder name surrounded by spaces
+        return re.search(rf"\b{re.escape(encoder_name)}\b", out) is not None
+    except Exception:
+        return False
+
+def build_streamable_mp4_command(src_path: Path, out_path: Path):
+    """
+    Build an ffmpeg command to create a browser-friendly fragmented MP4 suitable for streaming while writing.
+
+    If the source is already H.264 video and AAC/MP3 audio, perform a fast remux to MP4 with
+    -movflags +faststart+frag_keyframe+empty_moov. Otherwise, transcode video to H.264 and audio to AAC.
+
+    When GPU transcoding is enabled and available, prefer h264_nvenc.
+    """
+    vcodec, acodec = _probe_codecs(src_path)
+    use_gpu = os.getenv('TRANSCODE_GPU', '').lower() in ('true', '1', 'yes')
+
+    base = ['ffmpeg', '-v', 'error', '-y', '-i', str(src_path)]
+    tail = [
+        '-movflags', '+faststart+frag_keyframe+empty_moov',
+        '-max_muxing_queue_size', '1024',
+        '-f', 'mp4', str(out_path)
+    ]
+
+    # If already mp4 friendly, remux only (ensure AAC audio)
+    if (vcodec == 'h264') and (acodec in ('aac', 'mp3', 'mp2')):
+        return base + ['-c:v', 'copy', '-c:a', 'aac'] + tail
+
+    # Choose encoder
+    if use_gpu and _encoder_available('h264_nvenc'):
+        venc = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq:v', '23']
+    else:
+        venc = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '23']
+
+    aenc = ['-c:a', 'aac', '-b:a', '128k']
+    return base + venc + aenc + tail
+
 def calculate_transcode_timeout(video_path, base_timeout=7200):
     """
     Calculate a smart timeout for video transcoding based on video duration.
-    
+
     For CPU encoding, a reasonable estimate is:
     - Real-time encoding takes duration * 1x
     - Slow CPU encoding can take 10-20x the duration
     - We add a safety margin of 3x on top
-    
+
     Args:
         video_path: Path to the video file
         base_timeout: Base timeout in seconds (used if duration can't be determined)
-    
+
     Returns:
         int: Timeout in seconds
     """
     duration = get_video_duration(video_path)
-    
+
     if duration:
         # Use 60x the video duration as timeout (assumes worst case 20x encoding + 3x safety margin)
         # Minimum of 600 seconds (10 minutes) for very short videos
@@ -139,7 +200,7 @@ def diagnose_nvenc_setup():
         'library_paths': [],
         'ffmpeg_has_nvenc': False
     }
-    
+
     # Check if nvidia-smi is available
     try:
         result = sp.run(['nvidia-smi'], capture_output=True, timeout=5)
@@ -148,7 +209,7 @@ def diagnose_nvenc_setup():
             logger.debug("nvidia-smi is available - GPU is accessible")
     except Exception:
         logger.debug("nvidia-smi not available")
-    
+
     # Check for libnvidia-encode.so.1
     search_paths = [
         '/usr/lib/x86_64-linux-gnu',
@@ -157,17 +218,17 @@ def diagnose_nvenc_setup():
         '/usr/local/nvidia/lib64',
         '/usr/lib',
     ]
-    
+
     for path in search_paths:
         matches = glob.glob(f"{path}/*nvidia-encode*.so*")
         if matches:
             diagnostics['libnvidia_encode_found'] = True
             diagnostics['library_paths'].extend(matches)
-    
+
     # Check current LD_LIBRARY_PATH
     ld_path = os.environ.get('LD_LIBRARY_PATH', '')
     logger.debug(f"LD_LIBRARY_PATH: {ld_path}")
-    
+
     # Check if ffmpeg has nvenc
     try:
         result = sp.run(
@@ -180,26 +241,26 @@ def diagnose_nvenc_setup():
             diagnostics['ffmpeg_has_nvenc'] = 'h264_nvenc' in result.stdout
     except Exception:
         pass
-    
+
     return diagnostics
 
 def check_nvenc_available(encoder=None):
     """
     Check if NVENC (NVIDIA GPU encoding) is available.
-    
+
     Args:
         encoder: Optional specific encoder to check ('h264_nvenc' or 'av1_nvenc').
                  If None, checks if any NVENC encoder is available.
-    
+
     Returns:
         bool: True if the specified NVENC encoder (or any NVENC encoder) is available, False otherwise
     """
     cache_key = encoder or 'any_nvenc'
-    
+
     # Return cached result if available
     if cache_key in _nvenc_availability_cache:
         return _nvenc_availability_cache[cache_key]
-    
+
     try:
         # Try to get the list of encoders from ffmpeg
         result = sp.run(
@@ -208,7 +269,7 @@ def check_nvenc_available(encoder=None):
             text=True,
             timeout=5
         )
-        
+
         if result.returncode == 0:
             if encoder:
                 # Check for specific encoder
@@ -216,10 +277,10 @@ def check_nvenc_available(encoder=None):
             else:
                 # Check if any NVENC encoder is available (h264_nvenc is the baseline)
                 available = 'h264_nvenc' in result.stdout
-            
+
             _nvenc_availability_cache[cache_key] = available
             return available
-        
+
         _nvenc_availability_cache[cache_key] = False
         return False
     except Exception as ex:
@@ -241,10 +302,10 @@ def transcode_video(video_path, out_path):
 def _get_encoder_candidates(use_gpu=False):
     """
     Get the list of encoder configurations to try in priority order.
-    
+
     Args:
         use_gpu: Whether to include GPU encoders in the list
-    
+
     Returns:
         list: List of encoder configurations to try in order
     """
@@ -265,7 +326,7 @@ def _get_encoder_candidates(use_gpu=False):
             'extra_args': ['-preset', 'medium', '-crf', '23']
         }
     ]
-    
+
     # Define encoder configurations to try in order
     if use_gpu:
         # GPU mode: try GPU encoders first, then fall back to CPU encoders
@@ -293,76 +354,76 @@ def _get_encoder_candidates(use_gpu=False):
 def _build_transcode_command(video_path, out_path, height, encoder):
     """
     Build an ffmpeg command for transcoding with the given encoder.
-    
+
     Args:
         video_path: Path to the source video
         out_path: Path for the transcoded output
         height: Target height in pixels
         encoder: Encoder configuration dict
-    
+
     Returns:
         list: ffmpeg command as a list of arguments
     """
     cmd = ['ffmpeg', '-v', 'error', '-y', '-i', str(video_path)]
     cmd.extend(['-c:v', encoder['video_codec']])
-    
+
     if 'extra_args' in encoder:
         cmd.extend(encoder['extra_args'])
-    
+
     cmd.extend(['-vf', f'scale=-2:{height}'])
     cmd.extend(['-c:a', encoder['audio_codec'], '-b:a', encoder.get('audio_bitrate', '128k')])
     cmd.append(str(out_path))
-    
+
     return cmd
 
 def transcode_video_quality(video_path, out_path, height, use_gpu=False, timeout_seconds=None):
     """
     Transcode a video to a specific height (e.g., 720, 1080) while maintaining aspect ratio.
-    
+
     Tries encoders in priority order during actual transcoding, then caches the first
     successful encoder for all subsequent transcodes until the application is restarted.
-    
+
     Fallback chain when GPU is enabled:
     1. AV1 with GPU (av1_nvenc) - RTX 40 series or newer
     2. H.264 with GPU (h264_nvenc) - GTX 1050+ / Pascal or newer
     3. AV1 with CPU (libaom-av1) - Excellent compression
     4. H.264 with CPU (libx264) - Universal fallback
-    
+
     Args:
         video_path: Path to the source video
         out_path: Path for the transcoded output
         height: Target height in pixels (e.g., 720, 1080)
         use_gpu: Whether to use GPU acceleration (NVENC if available)
         timeout_seconds: Maximum time allowed for encoding (default: calculated based on video duration)
-    
+
     Returns:
         bool: True if transcoding succeeded, False if all encoders failed
     """
     global _working_encoder_cache
     s = time.time()
-    
+
     # Calculate smart timeout based on video duration if not provided
     if timeout_seconds is None:
         timeout_seconds = calculate_transcode_timeout(video_path)
-    
+
     logger.info(f"Using transcode timeout of {timeout_seconds}s ({timeout_seconds/60:.1f} minutes)")
-    
+
     # Determine output container based on codec
     out_path_str = str(out_path)
-    
+
     mode = 'gpu' if use_gpu else 'cpu'
-    
+
     # Use cached encoder if available to avoid redundant encoder detection during bulk transcoding.
     if _working_encoder_cache[mode] is not None:
         encoder = _working_encoder_cache[mode]
         logger.debug(f"Using cached {mode.upper()} encoder: {encoder['name']}")
-        
+
         # Build ffmpeg command using the cached encoder
         logger.info(f"Transcoding video to {height}p using {encoder['name']}")
         cmd = _build_transcode_command(video_path, out_path, height, encoder)
-        
+
         logger.debug(f"$: {' '.join(cmd)}")
-        
+
         try:
             result = sp.run(cmd, timeout=timeout_seconds)
             if result.returncode == 0:
@@ -390,35 +451,35 @@ def transcode_video_quality(video_path, out_path, height, use_gpu=False, timeout
             logger.warning(f"Cached encoder {encoder['name']} failed: {ex}")
             logger.info("Clearing encoder cache and retrying with all available encoders...")
             _working_encoder_cache[mode] = None
-    
+
     # No cached encoder - need to detect a working encoder
     # Check if GPU is requested but NVENC is not available in ffmpeg
     if use_gpu and not check_nvenc_available():
         logger.warning("GPU transcoding requested but NVENC not available in ffmpeg")
-        
+
         # Run diagnostics to help user understand the issue
         diag = diagnose_nvenc_setup()
-        
+
         if diag['nvidia_smi_available']:
             logger.warning("✓ GPU is accessible (nvidia-smi works)")
             logger.warning("✗ But NVENC encoder is not available to ffmpeg")
             logger.warning("")
-            
+
             # Try to automatically fix the library path issue
             if diag['libnvidia_encode_found'] and diag['library_paths'] and len(diag['library_paths']) > 0:
                 library_dir = str(Path(diag['library_paths'][0]).parent)
                 current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
                 current_paths = current_ld_path.split(':') if current_ld_path else []
-                
+
                 # Add the library directory to LD_LIBRARY_PATH if not already present
                 if library_dir not in current_paths:
                     new_ld_path = f"{library_dir}:{current_ld_path}" if current_ld_path else library_dir
                     os.environ['LD_LIBRARY_PATH'] = new_ld_path
                     logger.info(f"Automatically added {library_dir} to LD_LIBRARY_PATH")
-                    
+
                     # Clear the cache and retry the check
                     clear_nvenc_cache()
-                    
+
                     if check_nvenc_available():
                         logger.info("✓ NVENC is now available! Continuing with GPU transcoding")
                         # Don't set use_gpu to False, let it continue
@@ -474,22 +535,22 @@ def transcode_video_quality(video_path, out_path, height, use_gpu=False, timeout
             logger.warning("")
             logger.warning("See: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html")
             logger.info("Will attempt GPU transcoding anyway and fall back to CPU if needed")
-    
+
     # Try encoders in priority order with actual transcoding
     # When use_gpu=True, the candidate list includes GPU encoders first, then CPU encoders
     # as fallback, so CPU transcoding will be attempted automatically if GPU fails
     logger.info(f"Detecting working {mode.upper()} encoder by attempting transcode...")
     encoders = _get_encoder_candidates(use_gpu)
-    
+
     last_exception = None
     for encoder in encoders:
         logger.info(f"Trying {encoder['name']}...")
-        
+
         # Build ffmpeg command
         cmd = _build_transcode_command(video_path, out_path, height, encoder)
-        
+
         logger.debug(f"$: {' '.join(cmd)}")
-        
+
         try:
             result = sp.run(cmd, timeout=timeout_seconds)
             if result.returncode == 0:
@@ -529,13 +590,13 @@ def transcode_video_quality(video_path, out_path, height, use_gpu=False, timeout
                     logger.debug(f"Cleaned up failed output file: {out_path_str}")
                 except OSError as cleanup_ex:
                     logger.debug(f"Could not clean up failed output: {cleanup_ex}")
-    
+
     # If we get here, no encoder worked
     error_msg = f"No working {mode.upper()} encoder found for video. Tried: {', '.join([e['name'] for e in encoders])}"
     logger.error(error_msg)
     if last_exception:
         logger.error(f"Last error was: {last_exception}")
-    
+
     # Return False to indicate failure instead of raising exception
     # This allows the calling code to continue processing other videos
     return False
