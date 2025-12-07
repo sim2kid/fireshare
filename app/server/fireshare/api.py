@@ -557,7 +557,7 @@ def _select_encoder_from_preferences(preferences, whitelist, use_gpu):
                 return enc, uc
     return None, None
 
-@api.route('/api/stream')
+@api.route('/api/stream', methods=['GET', 'HEAD'])
 def stream_video():
     """
     Stream a browser-compatible MP4 (H.264/AAC) version of the requested video.
@@ -569,7 +569,7 @@ def stream_video():
         and stream the file progressively as it is written (suitable for Firefox)
     """
     from pathlib import Path as _Path
-    from .util import build_streamable_mp4_command
+    from .util import build_streamable_mp4_command, get_video_duration
 
     video_id = request.args.get('id')
     if not video_id:
@@ -582,6 +582,23 @@ def stream_video():
         src_path = _Path(get_video_path(video_id, subid, quality if quality != 'original' else None))
     except Exception as ex:
         return Response(status=404, response=str(ex))
+
+    # Compute duration once for header usage (best-effort)
+    duration = None
+    try:
+        duration = get_video_duration(src_path)
+    except Exception:
+        duration = None
+
+    # If this is a HEAD request, short-circuit without doing any I/O/transcoding
+    if request.method == 'HEAD':
+        headers = {
+            'Content-Type': 'video/mp4',
+        }
+        if duration is not None:
+            # Include duration header for client probes
+            headers['Content-Duration'] = str(duration)
+        return Response(status=200, headers=headers)
 
     # Prepare output/cached path
     paths = current_app.config['PATHS']
@@ -621,6 +638,8 @@ def stream_video():
         resp.headers.add('Accept-Ranges', 'bytes')
         # Best-effort codec indicator for cached file
         resp.headers.add('X-Codec-Used', 'H264')
+        if duration is not None:
+            resp.headers.add('Content-Duration', str(duration))
         return resp
 
     # If we already have a playable mp4, serve it with range support
@@ -705,6 +724,8 @@ def stream_video():
         'Cache-Control': 'no-cache',
         'X-Codec-Used': (target_codec or 'H264')
     }
+    if duration is not None:
+        headers['Content-Duration'] = str(duration)
     return Response(generate(), headers=headers)
 
 @api.route('/api/transcoding/enabled')
