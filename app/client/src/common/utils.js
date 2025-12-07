@@ -105,20 +105,25 @@ export const copyToClipboard = (textToCopy) => {
 export const getVideoUrl = (videoId, quality, extension) => {
   const URL = getUrl()
   const SERVED_BY = getServedBy()
-  
+
   if (quality === '720p' || quality === '1080p') {
     if (SERVED_BY === 'nginx') {
       return `${URL}/_content/derived/${videoId}/${videoId}-${quality}.mp4`
     }
-    return `${URL}/api/video?id=${videoId}&quality=${quality}`
+    // Use new ffmpeg-backed streaming endpoint
+    return `${URL}/api/stream?id=${videoId}&quality=${quality}`
   }
-  
+
   // Original quality
   if (SERVED_BY === 'nginx') {
     const videoPath = getVideoPath(videoId, extension)
     return `${URL}/_content/video/${videoPath}`
   }
-  return `${URL}/api/video?id=${extension === '.mkv' ? `${videoId}&subid=1` : videoId}`
+  // Use new ffmpeg-backed streaming endpoint for original
+  if (extension === '.mkv') {
+    return `${URL}/api/stream?id=${videoId}&subid=1`
+  }
+  return `${URL}/api/stream?id=${videoId}`
 }
 
 /**
@@ -131,10 +136,10 @@ export const getVideoUrl = (videoId, quality, extension) => {
  */
 export const getVideoSources = (videoId, videoInfo, extension) => {
   const sources = []
-  
+
   const has720p = videoInfo?.has_720p
   const has1080p = videoInfo?.has_1080p
-  
+
   // Add 720p
   if (has720p) {
     sources.push({
@@ -143,7 +148,7 @@ export const getVideoSources = (videoId, videoInfo, extension) => {
       label: '720p',
     })
   }
-  
+
   // Add 1080p
   if (has1080p) {
     sources.push({

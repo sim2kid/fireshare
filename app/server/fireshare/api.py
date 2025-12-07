@@ -4,6 +4,8 @@ import shutil
 import random
 import logging
 from subprocess import Popen
+import subprocess as sp
+import signal
 from textwrap import indent
 from flask import Blueprint, render_template, request, Response, jsonify, current_app, send_file, redirect
 from flask_login import current_user, login_required
@@ -28,7 +30,7 @@ def get_video_path(id, subid=None, quality=None):
     if not video:
         raise Exception(f"No video found for {id}")
     paths = current_app.config['PATHS']
-    
+
     # Handle quality variants (720p, 1080p)
     if quality and quality in ['720p', '1080p']:
         # Check if the transcoded version exists
@@ -37,7 +39,7 @@ def get_video_path(id, subid=None, quality=None):
             return str(derived_path)
         # Fall back to original if quality doesn't exist
         logger.warning(f"Requested quality {quality} for video {id} not found, falling back to original")
-    
+
     subid_suffix = f"-{subid}" if subid else ""
     ext = ".mp4" if subid else video.extension
     video_path = paths["processed"] / "video_links" / f"{id}{subid_suffix}{ext}"
@@ -111,7 +113,7 @@ def manual_scan():
 @login_required
 def get_videos():
     sort = request.args.get('sort')
-    # Check that the sort parameter is one of the allowed values 
+    # Check that the sort parameter is one of the allowed values
     allowed_sorts = [
         'updated_at desc',
         'updated_at asc',
@@ -121,7 +123,7 @@ def get_videos():
         'views asc'
     ]
     if sort not in allowed_sorts:
-        return jsonify({"error": "Invalid sort parameter"}), 400      
+        return jsonify({"error": "Invalid sort parameter"}), 400
 
     if "views" in sort:
         videos = Video.query.join(VideoInfo).all()
@@ -160,7 +162,7 @@ def get_random_public_video():
 def get_public_videos():
     sort = request.args.get('sort')
 
-    # Check that the sort parameter is one of the allowed values 
+    # Check that the sort parameter is one of the allowed values
     allowed_sorts = [
         'updated_at desc',
         'updated_at asc',
@@ -170,13 +172,13 @@ def get_public_videos():
         'views asc'
     ]
     if sort not in allowed_sorts:
-        return jsonify({"error": "Invalid sort parameter"}), 400        
+        return jsonify({"error": "Invalid sort parameter"}), 400
 
     if "views" in sort:
         videos = Video.query.join(VideoInfo).filter_by(private=False)
     else:
         videos = Video.query.join(VideoInfo).filter_by(private=False).order_by(text(sort))
-    
+
     videos_json = []
     for v in videos:
         vjson = v.json()
@@ -198,16 +200,16 @@ def delete_video(id):
     video = Video.query.filter_by(video_id=id).first()
     if video:
         logging.info(f"Deleting video: {video.video_id}")
-        
+
         paths = current_app.config['PATHS']
         file_path = paths['video'] / video.path
         link_path = paths['processed'] / 'video_links' / f"{id}{video.extension}"
         derived_path = paths['processed'] / 'derived' / id
-        
+
         VideoInfo.query.filter_by(video_id=id).delete()
         Video.query.filter_by(video_id=id).delete()
         db.session.commit()
-        
+
         try:
             if file_path.exists():
                 file_path.unlink()
@@ -222,7 +224,7 @@ def delete_video(id):
             logging.error(f"Error deleting files for video {id}: {e}")
             logging.error(f"Attempted to delete: file={file_path}, link={link_path}, derived={derived_path}")
         return Response(status=200)
-        
+
     else:
         return Response(status=404, response=f"A video with id: {id}, does not exist.")
 
@@ -286,11 +288,11 @@ def public_upload_video():
             logging.error("Invalid or corrupt config file")
             return Response(status=400)
         configfile.close()
-        
+
     if not config['app_config']['allow_public_upload']:
         logging.warn("A public upload attempt was made but public uploading is disabled")
         return Response(status=401)
-    
+
     upload_folder = config['app_config']['public_upload_folder_name']
 
     if 'file' not in request.files:
@@ -326,17 +328,17 @@ def public_upload_videoChunked():
             logging.error("Invalid or corrupt config file")
             return Response(status=400)
         configfile.close()
-        
+
     if not config['app_config']['allow_public_upload']:
         logging.warn("A public upload attempt was made but public uploading is disabled")
         return Response(status=401)
-    
+
     upload_folder = config['app_config']['public_upload_folder_name']
 
     required_files = ['blob']
     required_form_fields = ['chunkPart', 'totalChunks', 'checkSum']
     if not all(key in request.files for key in required_files) or not all(key in request.form for key in required_form_fields):
-        return Response(status=400)   
+        return Response(status=400)
     blob = request.files.get('blob')
     chunkPart = int(request.form.get('chunkPart'))
     totalChunks = int(request.form.get('totalChunks'))
@@ -349,23 +351,23 @@ def public_upload_videoChunked():
     filetype = filename.split('.')[-1] # TODO, probe filetype with fmpeg instead and remux to supporrted
     if not filetype in SUPPORTED_FILE_TYPES:
         return Response(status=400)
-     
+
     upload_directory = paths['video'] / upload_folder
     if not os.path.exists(upload_directory):
-        os.makedirs(upload_directory) 
+        os.makedirs(upload_directory)
     tempPath = os.path.join(upload_directory, f"{checkSum}.{filetype}")
     with open(tempPath, 'ab') as f:
         f.write(blob.read())
     if chunkPart < totalChunks:
         return Response(status=202)
-    
+
     save_path = os.path.join(upload_directory, filename)
 
     if (os.path.exists(save_path)):
         name_no_type = ".".join(filename.split('.')[0:-1])
         uid = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
         save_path = os.path.join(paths['video'], upload_folder, f"{name_no_type}-{uid}.{filetype}")
-    
+
     os.rename(tempPath, save_path)
     Popen(["fireshare", "scan-video", f"--path={save_path}"], shell=False)
     return Response(status=201)
@@ -380,7 +382,7 @@ def upload_video():
         except:
             return Response(status=500, response="Invalid or corrupt config file")
         configfile.close()
-    
+
     upload_folder = config['app_config']['admin_upload_folder_name']
 
     if 'file' not in request.files:
@@ -416,7 +418,7 @@ def upload_videoChunked():
         except:
             return Response(status=500, response="Invalid or corrupt config file")
         configfile.close()
-    
+
     upload_folder = config['app_config']['admin_upload_folder_name']
 
     required_files = ['blob']
@@ -424,28 +426,28 @@ def upload_videoChunked():
 
     if not all(key in request.files for key in required_files) or not all(key in request.form for key in required_form_fields):
         return Response(status=400)
-        
+
     blob = request.files.get('blob')
     chunkPart = int(request.form.get('chunkPart'))
     totalChunks = int(request.form.get('totalChunks'))
     checkSum = request.form.get('checkSum')
     fileName = secure_filename(request.form.get('fileName'))
     fileSize = int(request.form.get('fileSize'))
-    
+
     if not fileName:
         return Response(status=400)
-    
+
     filetype = fileName.split('.')[-1]
     if not filetype in SUPPORTED_FILE_TYPES:
         return Response(status=400)
-    
+
     upload_directory = paths['video'] / upload_folder
     if not os.path.exists(upload_directory):
         os.makedirs(upload_directory)
-    
+
     # Store chunks with part number to ensure proper ordering
     tempPath = os.path.join(upload_directory, f"{checkSum}.part{chunkPart:04d}")
-    
+
     # Write this specific chunk
     with open(tempPath, 'wb') as f:
         f.write(blob.read())
@@ -456,14 +458,14 @@ def upload_videoChunked():
         chunk_path = os.path.join(upload_directory, f"{checkSum}.part{i:04d}")
         if os.path.exists(chunk_path):
             chunk_files.append(chunk_path)
-    
+
     # If we don't have all chunks yet, return 202
     if len(chunk_files) != totalChunks:
         return Response(status=202)
 
     # All chunks received, reassemble the file
     save_path = os.path.join(upload_directory, fileName)
-    
+
     if os.path.exists(save_path):
         name_no_type = ".".join(fileName.split('.')[0:-1])
         uid = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
@@ -478,12 +480,12 @@ def upload_videoChunked():
                     output_file.write(chunk_file.read())
                 # Clean up chunk file
                 os.remove(chunk_path)
-        
+
         # Verify file size
         if os.path.getsize(save_path) != fileSize:
             os.remove(save_path)
             return Response(status=500, response="File size mismatch after reassembly")
-            
+
     except Exception as e:
         # Clean up on error
         for chunk_path in chunk_files:
@@ -529,7 +531,95 @@ def get_video():
     rv = Response(chunk, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
     rv.headers.add('Content-Range', 'bytes {0}-{1}/{2}'.format(start, start + length - 1, file_size))
     return rv
-    
+
+@api.route('/api/stream')
+def stream_video():
+    """
+    New streaming endpoint that pipes video through ffmpeg for fragmented MP4 chunked streaming.
+
+    Query params:
+      - id: video id (required)
+      - subid: optional subtitle id (for historical mkv handling; currently unused for mapping)
+      - quality: optional quality variant ('720p'|'1080p'|'original'); if provided and exists, used as input
+      - vcodec, acodec: optional future params to specify codecs. Defaults to 'copy' (stream copy)
+    """
+    from .util import get_media_info
+
+    video_id = request.args.get('id')
+    if not video_id:
+        return Response(status=400, response='Missing required parameter: id')
+    subid = request.args.get('subid')
+    quality = request.args.get('quality')
+    vcodec = request.args.get('vcodec', 'copy')
+    acodec = request.args.get('acodec', 'copy')
+
+    # Resolve input path (re-uses existing logic and quality fallback)
+    try:
+        input_path = get_video_path(video_id, subid, quality if quality != 'original' else None)
+    except Exception as ex:
+        return Response(status=404, response=str(ex))
+
+    # Probe media to determine first video/audio streams (kept simple for now)
+    streams = get_media_info(input_path) or []
+    v_map = '0:v:0'
+    a_map = '0:a:0'
+    has_audio = any(s.get('codec_type') == 'audio' for s in streams)
+
+    # Build ffmpeg command
+    # Use fragmented MP4 suitable for HTTP chunked transfer
+    cmd = [
+        'ffmpeg', '-v', 'error', '-nostdin',
+        '-i', str(input_path),
+        '-map', v_map,
+    ]
+    if has_audio:
+        cmd += ['-map', a_map]
+    # Set codecs (default copy to preserve original)
+    cmd += ['-c:v', vcodec]
+    if has_audio:
+        cmd += ['-c:a', acodec]
+    # Faststart + fragmented for streaming
+    cmd += [
+        '-movflags', '+frag_keyframe+empty_moov+faststart',
+        '-f', 'mp4',
+        'pipe:1'
+    ]
+
+    current_app.logger.debug(f"$ {' '.join(cmd)}")
+
+    try:
+        process = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE, bufsize=0)
+    except FileNotFoundError:
+        return Response(status=500, response='ffmpeg not found on server')
+
+    def generate():
+        try:
+            while True:
+                chunk = process.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            # Ensure process is terminated if client disconnects
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except Exception:
+                        process.kill()
+            except Exception:
+                pass
+
+    headers = {
+        'Content-Type': 'video/mp4',
+        # Disable caching for dynamic streams
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+    }
+
+    return Response(generate(), headers=headers)
+
 def get_folder_size(folder_path):
     total_size = 0
     for dirpath, dirnames, filenames in os.walk(folder_path):
