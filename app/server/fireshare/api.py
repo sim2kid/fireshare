@@ -569,7 +569,7 @@ def stream_video():
         and stream the file progressively as it is written (suitable for Firefox)
     """
     from pathlib import Path as _Path
-    from .util import build_streamable_mp4_command, get_video_duration
+    from .util import build_streamable_mp4_command, get_video_duration, _probe_codecs
 
     video_id = request.args.get('id')
     if not video_id:
@@ -626,11 +626,32 @@ def stream_video():
         resp = Response(data, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
         resp.headers.add('Content-Range', f'bytes {start}-{start + length - 1}/{file_size}')
         resp.headers.add('Accept-Ranges', 'bytes')
-        # Best-effort codec indicator for cached file: infer from filename suffix "-stream-CODEC.mp4"
+        # Best-effort codec indicator for cached file:
+        # 1) Infer from filename suffix patterns like "-stream-CODEC.mp4" or "-720p-CODEC.mp4"
+        # 2) Fallback to probing the file with ffprobe to detect the actual video codec
+        # 3) Default to H264 if all else fails
         codec_used = 'H264'
-        mname = re.search(r"-stream-([A-Za-z0-9]+)\.mp4$", file_path.name)
+        # Try to extract from filename patterns
+        mname = re.search(r"-(?:stream|\d{3,4}p)-([A-Za-z0-9_]+)\.mp4$", file_path.name)
         if mname:
             codec_used = mname.group(1).upper()
+        else:
+            # Probe file to detect codec name
+            vcodec, _ = _probe_codecs(file_path)
+            if vcodec:
+                v = vcodec.lower()
+                mapping = {
+                    'h264': 'H264',
+                    'avc': 'H264',
+                    'hevc': 'HEVC',
+                    'h265': 'HEVC',
+                    'av1': 'AV1',
+                    'mpeg4': 'MPEG4',
+                    'mp4v': 'MPEG4',
+                    'vp9': 'VP9',
+                    'vp8': 'VP8',
+                }
+                codec_used = mapping.get(v, v.upper())
         resp.headers.add('X-Codec-Used', codec_used)
         if duration is not None:
             resp.headers.add('Content-Duration', str(duration))
