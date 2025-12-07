@@ -102,7 +102,7 @@ export const copyToClipboard = (textToCopy) => {
 export const getVideoUrl = (videoId, quality, extension) => {
   const URL = getUrl()
   const SERVED_BY = getServedBy()
-  const codecs = getClientSupportedCodecs().join(',')
+  const codecs = getClientSupportedCodecs(videoId).join(',')
 
   if (quality === '720p' || quality === '1080p') {
     if (SERVED_BY === 'nginx') {
@@ -167,8 +167,22 @@ export const getVideoSources = (videoId, videoInfo, extension) => {
   return sources
 }
 
+// Read per-video failed codecs persisted in sessionStorage by VideoJSPlayer error handler
+const getFailedCodecsForVideo = (videoId) => {
+  try {
+    if (!videoId) return []
+    const raw = sessionStorage.getItem(`fs_failed_codecs_${videoId}`)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed
+    return []
+  } catch {
+    return []
+  }
+}
+
 // Determine client-supported codecs in preference order (full list; H264 always included)
-export const getClientSupportedCodecs = () => {
+export const getClientSupportedCodecs = (videoId = undefined) => {
   const video = document.createElement('video')
   if (!video || typeof video.canPlayType !== 'function') {
     return ['H264']
@@ -199,5 +213,13 @@ export const getClientSupportedCodecs = () => {
   const out = []
   ranked.forEach(n => { if (!out.includes(n)) out.push(n) })
   if (!out.includes('H264')) out.push('H264')
+
+  // If we have prior failures for this video, move those codecs to the end (deprioritize)
+  const failed = getFailedCodecsForVideo(videoId).map(n => String(n).toUpperCase())
+  if (failed.length) {
+    const keep = out.filter(n => !failed.includes(String(n).toUpperCase()))
+    const moved = out.filter(n => failed.includes(String(n).toUpperCase()))
+    return [...keep, ...moved]
+  }
   return out
 }
