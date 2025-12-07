@@ -600,20 +600,10 @@ def stream_video():
             headers['Content-Duration'] = str(duration)
         return Response(status=200, headers=headers)
 
-    # Prepare output/cached path
+    # Prepare output directory
     paths = current_app.config['PATHS']
     derived_dir = _Path(paths['processed']) / 'derived' / video_id
     derived_dir.mkdir(parents=True, exist_ok=True)
-    out_path = derived_dir / f"{video_id}-stream.mp4"
-
-    # If there is already a derived quality-specific mp4, prefer it
-    preferred_mp4 = None
-    if quality in ('720p', '1080p'):
-        candidate = derived_dir / f"{video_id}-{quality}.mp4"
-        if candidate.exists():
-            preferred_mp4 = candidate
-    if preferred_mp4 is None and out_path.exists():
-        preferred_mp4 = out_path
 
     def _stream_file_with_range(file_path: _Path):
         """Serve an existing file with range support."""
@@ -636,25 +626,15 @@ def stream_video():
         resp = Response(data, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
         resp.headers.add('Content-Range', f'bytes {start}-{start + length - 1}/{file_size}')
         resp.headers.add('Accept-Ranges', 'bytes')
-        # Best-effort codec indicator for cached file
-        resp.headers.add('X-Codec-Used', 'H264')
+        # Best-effort codec indicator for cached file: infer from filename suffix "-stream-CODEC.mp4"
+        codec_used = 'H264'
+        mname = re.search(r"-stream-([A-Za-z0-9]+)\.mp4$", file_path.name)
+        if mname:
+            codec_used = mname.group(1).upper()
+        resp.headers.add('X-Codec-Used', codec_used)
         if duration is not None:
             resp.headers.add('Content-Duration', str(duration))
         return resp
-
-    # If we already have a playable mp4, serve it with range support
-    if preferred_mp4 and preferred_mp4.exists():
-        return _stream_file_with_range(preferred_mp4)
-
-    # Otherwise, begin (re)mux/transcode to out_path and stream progressively
-    try:
-        # Ensure any previous partial is removed to avoid stale tails
-        # Only remove if not currently being written by a concurrent process (lock present)
-        lock_path = _Path(str(out_path) + '.lock')
-        if out_path.exists() and not lock_path.exists() and out_path.stat().st_size < 1024:
-            out_path.unlink(missing_ok=True)
-    except Exception:
-        pass
 
     # Parse client codec preferences and apply server rules
     codecs_csv = request.args.get('codecs', '') or ''
@@ -696,6 +676,39 @@ def stream_video():
             # pick any whitelist value that we support in MP4
             common = [c for c in whitelist if c in mp4_friendly]
             target_codec = common[0] if common else 'H264'
+
+    # Now that we know the target codec, compute the codec-specific stream cache path
+    # Use suffix -stream-CODEC.mp4 to avoid cross-codec collisions
+    out_path = derived_dir / f"{video_id}-stream-{target_codec}.mp4"
+
+    # If there is already a derived quality-specific mp4, prefer it; otherwise prefer the codec-specific stream cache
+    preferred_mp4 = None
+    if quality in ('720p', '1080p'):
+        candidate = derived_dir / f"{video_id}-{quality}.mp4"
+        if candidate.exists():
+            preferred_mp4 = candidate
+    if preferred_mp4 is None:
+        # Prefer new codec-specific cache, else fall back to legacy cache name for backward compatibility
+        if out_path.exists():
+            preferred_mp4 = out_path
+        else:
+            legacy = derived_dir / f"{video_id}-stream.mp4"
+            if legacy.exists():
+                preferred_mp4 = legacy
+
+    # If we already have a playable mp4, serve it with range support
+    if preferred_mp4 and preferred_mp4.exists():
+        return _stream_file_with_range(preferred_mp4)
+
+    # Otherwise, begin (re)mux/transcode to out_path and stream progressively
+    try:
+        # Ensure any previous partial is removed to avoid stale tails
+        # Only remove if not currently being written by a concurrent process (lock present)
+        lock_path = _Path(str(out_path) + '.lock')
+        if out_path.exists() and not lock_path.exists() and out_path.stat().st_size < 1024:
+            out_path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
     # Simple per-output lock to avoid concurrent ffmpeg processes writing the same file
     lock_path = _Path(str(out_path) + '.lock')
