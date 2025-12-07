@@ -543,7 +543,7 @@ def stream_video():
       - quality: optional quality variant ('720p'|'1080p'|'original'); if provided and exists, used as input
       - vcodec, acodec: optional future params to specify codecs. Defaults to 'copy' (stream copy)
     """
-    from .util import get_media_info
+    from .util import get_media_info, get_video_duration
 
     video_id = request.args.get('id')
     if not video_id:
@@ -611,12 +611,29 @@ def stream_video():
             except Exception:
                 pass
 
+    # Try to compute final duration of the input so the player can display it even for fragmented streams
+    stream_duration = None
+    try:
+        stream_duration = get_video_duration(input_path)
+    except Exception:
+        stream_duration = None
+
     headers = {
         'Content-Type': 'video/mp4',
         # Disable caching for dynamic streams
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache'
     }
+
+    # Provide duration hints for players that support it
+    if stream_duration and stream_duration > 0:
+        # Non-standard but widely used header
+        headers['X-Content-Duration'] = str(stream_duration)
+        # RFC 7826 (RTSP) and sometimes honored by browsers for media
+        headers['Content-Duration'] = str(stream_duration)
+
+    # Expose duration headers to browsers for CORS requests
+    headers['Access-Control-Expose-Headers'] = 'X-Content-Duration, Content-Duration'
 
     return Response(generate(), headers=headers)
 

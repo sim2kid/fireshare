@@ -8,7 +8,7 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import SnackbarAlert from '../components/alert/SnackbarAlert'
 import NotFound from './NotFound'
 import { VideoService } from '../services'
-import { getServedBy, getUrl, getPublicWatchUrl, copyToClipboard, getVideoSources } from '../common/utils'
+import { getServedBy, getUrl, getPublicWatchUrl, copyToClipboard, getVideoSources, getVideoUrl } from '../common/utils'
 import VideoJSPlayer from '../components/misc/VideoJSPlayer'
 
 const URL = getUrl()
@@ -29,6 +29,7 @@ const Watch = ({ authenticated }) => {
   const [notFound, setNotFound] = React.useState(false)
   const [views, setViews] = React.useState()
   const [viewAdded, setViewAdded] = React.useState(false)
+  const [durationHint, setDurationHint] = React.useState(null)
 
   const videoPlayerRef = useRef(null)
   const [alert, setAlert] = React.useState({ open: false })
@@ -59,6 +60,31 @@ const Watch = ({ authenticated }) => {
       }
     }
     if (details == null) fetch()
+  }, [details, id])
+
+  // Fetch duration for the stream from headers so the player can show the final length
+  React.useEffect(() => {
+    const fetchDuration = async () => {
+      try {
+        if (!details) return
+        if (SERVED_BY === 'nginx') return // browser will get duration from static file
+        const extension = details?.extension || '.mp4'
+        const url = getVideoUrl(id, 'original', extension)
+        const res = await fetch(url, { method: 'HEAD' })
+        if (res.ok) {
+          // Try custom and standard headers
+          const xdur = res.headers.get('x-content-duration')
+          const cdur = res.headers.get('content-duration')
+          const dur = parseFloat(xdur || cdur)
+          if (!isNaN(dur) && isFinite(dur) && dur > 0) {
+            setDurationHint(dur)
+          }
+        }
+      } catch (e) {
+        // ignore, fallback to player metadata
+      }
+    }
+    fetchDuration()
   }, [details, id])
 
   const getCurrentTime = () => {
@@ -184,7 +210,7 @@ const Watch = ({ authenticated }) => {
           value={
             SERVED_BY === 'nginx'
               ? `${URL}/_content/video/${id}${details?.extension || '.mp4'}`
-              : `${URL}/api/video?id=${id}`
+              : `${URL}/api/stream?id=${id}`
           }
         />
         <meta property="og:video:width" value={details?.info?.width} />
@@ -203,6 +229,7 @@ const Watch = ({ authenticated }) => {
               videoPlayerRef.current = player
             }}
             startTime={time ? parseFloat(time) : 0}
+            durationHint={durationHint}
             style={{ backgroundColor: '#000' }}
           />
         </Grid>
