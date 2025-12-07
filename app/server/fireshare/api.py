@@ -532,6 +532,31 @@ def get_video():
     rv.headers.add('Content-Range', 'bytes {0}-{1}/{2}'.format(start, start + length - 1, file_size))
     return rv
 
+def _select_encoder_from_preferences(preferences, whitelist, use_gpu):
+    """
+    Select the first codec present in both preferences and whitelist and map it to ffmpeg encoder name.
+    Returns tuple (encoder_name, logical_codec) or (None, None) if none matched.
+    """
+    # Map logical codec -> (cpu_encoder, gpu_encoder)
+    codec_map = {
+        'H264': ('libx264', 'h264_nvenc'),
+        'HEVC': ('libx265', 'hevc_nvenc'),
+        'MPEG2': ('mpeg2video', 'mpeg2_nvenc'),
+        'MPEG4': ('mpeg4', None),
+        'VC1': (None, None),  # No common encoder in ffmpeg
+        'VP8': ('libvpx', None),
+        'VP9': ('libvpx-vp9', None),
+        'AV1': ('libaom-av1', 'av1_nvenc'),
+    }
+    for c in preferences:
+        uc = c.upper()
+        if uc in whitelist and uc in codec_map:
+            cpu, gpu = codec_map[uc]
+            enc = (gpu if use_gpu and gpu else cpu)
+            if enc:
+                return enc, uc
+    return None, None
+
 @api.route('/api/stream')
 def stream_video():
     """
@@ -552,6 +577,8 @@ def stream_video():
     quality = request.args.get('quality')
     vcodec = request.args.get('vcodec', 'copy')
     acodec = request.args.get('acodec', 'copy')
+    codecs_csv = request.args.get('codecs')  # client-supported logical codecs, CSV
+    codec_try = int(request.args.get('codec_try', '0') or 0)
 
     # Resolve input path (re-uses existing logic and quality fallback)
     try:
@@ -565,6 +592,23 @@ def stream_video():
     a_map = '0:a:0'
     has_audio = any(s.get('codec_type') == 'audio' for s in streams)
 
+    # Decide codec if transcoding is enabled and client provided preferences
+    enable_transcoding = current_app.config.get('ENABLE_TRANSCODING', False)
+    use_gpu = current_app.config.get('TRANSCODE_GPU', False)
+    whitelist = current_app.config.get('VIDEO_CODEC_WHITELIST', ['H264'])
+
+    if enable_transcoding and codecs_csv:
+        prefs = [p.strip().upper() for p in codecs_csv.split(',') if p.strip()]
+        # Rotate based on codec_try index (try next preferred)
+        if 0 <= codec_try < len(prefs):
+            prefs = prefs[codec_try:]
+        selected_encoder, logical = _select_encoder_from_preferences(prefs, whitelist, use_gpu)
+        if selected_encoder:
+            vcodec = selected_encoder
+            current_app.logger.info(f"Streaming {video_id} using transcoded codec {logical} ({vcodec}) [try #{codec_try+1}]")
+        else:
+            current_app.logger.info("No matching codec between client preferences and whitelist; falling back to copy")
+
     # Build ffmpeg command
     # Use fragmented MP4 suitable for HTTP chunked transfer
     cmd = [
@@ -577,7 +621,11 @@ def stream_video():
     # Set codecs (default copy to preserve original)
     cmd += ['-c:v', vcodec]
     if has_audio:
-        cmd += ['-c:a', acodec]
+        # Prefer AAC for widest support if we are transcoding video
+        if vcodec != 'copy' and acodec == 'copy':
+            cmd += ['-c:a', 'aac']
+        else:
+            cmd += ['-c:a', acodec]
     # Faststart + fragmented for streaming
     cmd += [
         '-movflags', '+frag_keyframe+empty_moov+faststart',
@@ -632,10 +680,19 @@ def stream_video():
         # RFC 7826 (RTSP) and sometimes honored by browsers for media
         headers['Content-Duration'] = str(stream_duration)
 
-    # Expose duration headers to browsers for CORS requests
-    headers['Access-Control-Expose-Headers'] = 'X-Content-Duration, Content-Duration'
+    # Communicate transcoding capability to the client
+    headers['X-Transcoding-Enabled'] = 'true' if enable_transcoding else 'false'
+
+    # Expose headers to browsers for CORS requests
+    headers['Access-Control-Expose-Headers'] = 'X-Content-Duration, Content-Duration, X-Transcoding-Enabled'
 
     return Response(generate(), headers=headers)
+
+@api.route('/api/transcoding/enabled')
+def transcoding_enabled():
+    """Lightweight capability endpoint for clients to know if server-side transcoding is enabled."""
+    enabled = current_app.config.get('ENABLE_TRANSCODING', False)
+    return jsonify({"enabled": bool(enabled)})
 
 def get_folder_size(folder_path):
     total_size = 0

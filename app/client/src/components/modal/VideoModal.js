@@ -49,15 +49,15 @@ const VideoModal = ({ open, onClose, videoId, feedView, authenticated, updateCal
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const result = await ConfigService.getConfig();  
-        setAutoplay(result.data?.autoplay || false);  
+        const result = await ConfigService.getConfig();
+        setAutoplay(result.data?.autoplay || false);
       } catch (error) {
         console.error('Error fetching config:', error);
       }
     };
 
-    fetchConfig();  
-  }, []);  
+    fetchConfig();
+  }, []);
 
   React.useEffect(() => {
     async function fetch() {
@@ -219,6 +219,7 @@ const VideoModal = ({ open, onClose, videoId, feedView, authenticated, updateCal
                   onReady={(player) => {
                     playerRef.current = player
                   }}
+                  videoId={vid.video_id}
                 />
               </Grid>
               <Grid item>

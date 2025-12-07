@@ -64,7 +64,7 @@ def create_app(init_schedule=False):
     app.config['ENVIRONMENT'] = os.getenv('ENVIRONMENT')
     app.config['DOMAIN'] = os.getenv('DOMAIN')
     app.config['THUMBNAIL_VIDEO_LOCATION'] = int(os.getenv('THUMBNAIL_VIDEO_LOCATION') or 0)
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32)) 
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
     app.config['DATA_DIRECTORY'] = os.getenv('DATA_DIRECTORY')
     app.config['VIDEO_DIRECTORY'] = os.getenv('VIDEO_DIRECTORY')
     app.config['PROCESSED_DIRECTORY'] = os.getenv('PROCESSED_DIRECTORY')
@@ -82,6 +82,11 @@ def create_app(init_schedule=False):
     app.config['ENABLE_TRANSCODING'] = os.getenv('ENABLE_TRANSCODING', '').lower() in ('true', '1', 'yes')
     app.config['TRANSCODE_GPU'] = os.getenv('TRANSCODE_GPU', '').lower() in ('true', '1', 'yes')
     app.config['TRANSCODE_TIMEOUT'] = int(os.getenv('TRANSCODE_TIMEOUT', '7200'))  # Default: 2 hours
+    # Comma-separated whitelist of logical video codecs the server is allowed to transcode to
+    # Supported values: H264, HEVC, MPEG2, MPEG4, VC1, VP8, VP9, AV1
+    # Default: only H264 enabled
+    whitelist_raw = os.getenv('TRANSCODE_VIDEO_CODECS', 'H264')
+    app.config['VIDEO_CODEC_WHITELIST'] = [c.strip().upper() for c in whitelist_raw.split(',') if c.strip()]
 
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{app.config["DATA_DIRECTORY"]}/db.sqlite'
     app.config['SCHEDULED_JOBS_DATABASE_URI'] = f'sqlite:///jobs.sqlite'
@@ -94,7 +99,7 @@ def create_app(init_schedule=False):
         stdPasswordWarning = "You are using the Default Login-Credentials, please consider changing it."
         app.config['WARNINGS'].append(stdPasswordWarning)
         logger.warning(stdPasswordWarning)
-    
+
 
     paths = {
         'data': Path(app.config['DATA_DIRECTORY']),
@@ -114,7 +119,7 @@ def create_app(init_schedule=False):
         if not subpath.is_dir():
             logger.info(f"Creating subpath directory at {str(subpath.absolute())}")
             subpath.mkdir(parents=True, exist_ok=True)
-    
+
     update_config(paths['data'] / 'config.json')
 
     db.init_app(app)
@@ -129,7 +134,7 @@ def create_app(init_schedule=False):
         app.ldap_conn.protocol_version = ldap.VERSION3
         app.ldap_conn.simple_bind_s(app.config["LDAP_BINDDN"] + "," + app.config["LDAP_BASEDN"], app.config["LDAP_PASSWORD"])
         app.logger.info("LDAP connection successful")
-    
+
     login_manager = LoginManager()
     login_manager.init_app(app)
 

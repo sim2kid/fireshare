@@ -105,13 +105,14 @@ export const copyToClipboard = (textToCopy) => {
 export const getVideoUrl = (videoId, quality, extension) => {
   const URL = getUrl()
   const SERVED_BY = getServedBy()
+  const codecs = getClientSupportedCodecs().join(',')
 
   if (quality === '720p' || quality === '1080p') {
     if (SERVED_BY === 'nginx') {
       return `${URL}/_content/derived/${videoId}/${videoId}-${quality}.mp4`
     }
     // Use new ffmpeg-backed streaming endpoint
-    return `${URL}/api/stream?id=${videoId}&quality=${quality}`
+    return `${URL}/api/stream?id=${videoId}&quality=${quality}&codecs=${encodeURIComponent(codecs)}&codec_try=0`
   }
 
   // Original quality
@@ -121,9 +122,9 @@ export const getVideoUrl = (videoId, quality, extension) => {
   }
   // Use new ffmpeg-backed streaming endpoint for original
   if (extension === '.mkv') {
-    return `${URL}/api/stream?id=${videoId}&subid=1`
+    return `${URL}/api/stream?id=${videoId}&subid=1&codecs=${encodeURIComponent(codecs)}&codec_try=0`
   }
-  return `${URL}/api/stream?id=${videoId}`
+  return `${URL}/api/stream?id=${videoId}&codecs=${encodeURIComponent(codecs)}&codec_try=0`
 }
 
 /**
@@ -167,4 +168,39 @@ export const getVideoSources = (videoId, videoInfo, extension) => {
   })
 
   return sources
+}
+
+// Determine client-supported codecs in preference order (full list; H264 always included)
+export const getClientSupportedCodecs = () => {
+  const video = document.createElement('video')
+  if (!video || typeof video.canPlayType !== 'function') {
+    return ['H264']
+  }
+  const candidates = [
+    { name: 'H264', type: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"' },
+    { name: 'AV1', type: 'video/mp4; codecs="av01.0.05M.08, mp4a.40.2"' },
+    { name: 'VP9', type: 'video/webm; codecs="vp9, opus"' },
+    { name: 'VP8', type: 'video/webm; codecs="vp8, vorbis"' },
+    { name: 'HEVC', type: 'video/mp4; codecs="hvc1.1.6.L93.B0"' },
+    { name: 'MPEG4', type: 'video/mp4; codecs="mp4v.20.9"' },
+    { name: 'MPEG2', type: 'video/mp2t' },
+  ]
+  // Rank by canPlayType result: probably > maybe > ''
+  const ranked = candidates
+    .map(c => ({
+      name: c.name,
+      support: video.canPlayType(c.type) || ''
+    }))
+    .filter(c => c.support && c.support.length > 0)
+    .sort((a, b) => {
+      const score = v => (v.support === 'probably' ? 2 : v.support === 'maybe' ? 1 : 0)
+      return score(b) - score(a)
+    })
+    .map(c => c.name)
+
+  // Always ensure H264 is present as a safe fallback
+  const out = []
+  ranked.forEach(n => { if (!out.includes(n)) out.push(n) })
+  if (!out.includes('H264')) out.push('H264')
+  return out
 }

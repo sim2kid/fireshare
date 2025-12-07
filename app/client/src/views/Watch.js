@@ -231,6 +231,7 @@ const Watch = ({ authenticated }) => {
             startTime={time ? parseFloat(time) : 0}
             durationHint={durationHint}
             style={{ backgroundColor: '#000' }}
+            videoId={id}
           />
         </Grid>
         <Grid item xs={12}>

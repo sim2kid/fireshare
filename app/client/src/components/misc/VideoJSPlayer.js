@@ -22,13 +22,18 @@ const VideoJSPlayer = ({
   startTime,
   durationHint,
   className,
-  style
+  style,
+  videoId,
 }) => {
   const videoRef = useRef(null)
   const playerRef = useRef(null)
   const originalDurationRef = useRef(null)
   const onTimeUpdateRef = useRef(onTimeUpdate)
   const onReadyRef = useRef(onReady)
+  // Track failed codec attempts locally (per player instance)
+  const failedCodecsRef = useRef(new Set())
+  // Cache whether the server supports transcoding for the current stream URL
+  const transcodingEnabledRef = useRef(null)
 
   // Keep refs updated with latest callback values
   useEffect(() => {
@@ -91,6 +96,63 @@ const VideoJSPlayer = ({
         const currentTime = player.currentTime()
         if (onTimeUpdateRef.current) {
           onTimeUpdateRef.current({ playedSeconds: currentTime || 0 })
+        }
+      })
+
+      // Handle playback errors client-side: track failures and try next codec until list exhausted,
+      // but ONLY if the server supports transcoding for stream negotiation.
+      player.on('error', async () => {
+        try {
+          const currentSrc = player.currentSrc()
+          if (!currentSrc) return
+          const url = new URL(currentSrc)
+          const codecs = url.searchParams.get('codecs') || ''
+          const codecTry = parseInt(url.searchParams.get('codec_try') || '0')
+          const list = codecs.split(',').map(s => s.trim()).filter(Boolean)
+          if (!list.length) return
+          // Check server capability once via a lightweight capability endpoint
+          if (transcodingEnabledRef.current === null) {
+            try {
+              const res = await fetch(`${window.location.origin}/api/transcoding/enabled`)
+              if (res.ok) {
+                const data = await res.json().catch(() => ({}))
+                transcodingEnabledRef.current = !!data.enabled
+              } else {
+                transcodingEnabledRef.current = false
+              }
+            } catch (e) {
+              transcodingEnabledRef.current = false
+            }
+          }
+          if (!transcodingEnabledRef.current) {
+            // Server does not transcode; don't iterate codecs
+            return
+          }
+          // Record failure locally for this client/session
+          const failed = list[codecTry]
+          if (failed) {
+            try { failedCodecsRef.current.add(failed.toUpperCase()) } catch (_) {}
+            // Optionally persist per-video in sessionStorage to avoid re-trying on re-open within the same tab
+            try {
+              const key = `fs_failed_codecs_${videoId || 'unknown'}`
+              const prev = JSON.parse(sessionStorage.getItem(key) || '[]')
+              if (!prev.includes(failed)) {
+                sessionStorage.setItem(key, JSON.stringify([...prev, failed]))
+              }
+            } catch (_) {}
+          }
+          // Try next codec until we exhaust the list
+          if (codecTry < (list.length - 1)) {
+            url.searchParams.set('codec_try', String(codecTry + 1))
+            const t = player.currentTime()
+            player.src({ src: url.toString(), type: 'video/mp4' })
+            player.one('loadedmetadata', () => {
+              try { player.currentTime(t) } catch {}
+              player.play().catch(() => {})
+            })
+          }
+        } catch (e) {
+          // ignore
         }
       })
 
