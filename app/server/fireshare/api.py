@@ -649,7 +649,9 @@ def stream_video():
     # Otherwise, begin (re)mux/transcode to out_path and stream progressively
     try:
         # Ensure any previous partial is removed to avoid stale tails
-        if out_path.exists() and out_path.stat().st_size < 1024:
+        # Only remove if not currently being written by a concurrent process (lock present)
+        lock_path = _Path(str(out_path) + '.lock')
+        if out_path.exists() and not lock_path.exists() and out_path.stat().st_size < 1024:
             out_path.unlink(missing_ok=True)
     except Exception:
         pass
@@ -695,10 +697,79 @@ def stream_video():
             common = [c for c in whitelist if c in mp4_friendly]
             target_codec = common[0] if common else 'H264'
 
-    # Build an ffmpeg command: remux if already target-compatible; else transcode
-    cmd = build_streamable_mp4_command(src_path, out_path, target_codec=target_codec, use_gpu=use_gpu)
-    current_app.logger.info(f"Starting on-the-fly transcode for {video_id}: {' '.join(cmd)}")
-    proc = Popen(cmd)
+    # Simple per-output lock to avoid concurrent ffmpeg processes writing the same file
+    lock_path = _Path(str(out_path) + '.lock')
+
+    def _acquire_lock(timeout_s: float = 60.0):
+        start_time = time.time()
+        last_growth_check = time.time()
+        last_size = out_path.stat().st_size if out_path.exists() else 0
+        while True:
+            try:
+                # Atomic create lock file
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, 'w') as f:
+                    payload = {
+                        'pid': os.getpid(),
+                        'ts': time.time(),
+                        'out': str(out_path)
+                    }
+                    f.write(json.dumps(payload))
+                current_app.logger.info(f"Acquired stream lock {lock_path}")
+                return True
+            except FileExistsError:
+                # Someone else is working on it; stream existing/growing file or wait briefly
+                if out_path.exists():
+                    return False  # We can stream the growing file below
+                # No file yet; wait but break stale locks if needed
+                time.sleep(0.25)
+                now = time.time()
+                # If we've waited beyond timeout, consider lock stale and remove if file absent or not growing
+                if now - start_time > timeout_s:
+                    try:
+                        # If file exists and is growing, keep waiting; otherwise remove stale lock
+                        if out_path.exists():
+                            size_now = out_path.stat().st_size
+                            if size_now > last_size:
+                                last_size = size_now
+                                last_growth_check = now
+                                continue
+                        current_app.logger.warning(f"Stale lock detected at {lock_path}, removing")
+                        lock_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    # Try one more time to acquire after removing
+            except Exception as e:
+                current_app.logger.warning(f"Unexpected error acquiring lock {lock_path}: {e}")
+                time.sleep(0.25)
+
+    def _release_lock():
+        try:
+            lock_path.unlink(missing_ok=True)
+            current_app.logger.info(f"Released stream lock {lock_path}")
+        except Exception:
+            pass
+
+    acquired = _acquire_lock()
+
+    proc = None
+    if acquired:
+        # Build an ffmpeg command: remux if already target-compatible; else transcode
+        cmd = build_streamable_mp4_command(src_path, out_path, target_codec=target_codec, use_gpu=use_gpu)
+        current_app.logger.info(f"Starting on-the-fly transcode for {video_id}: {' '.join(cmd)}")
+        proc = Popen(cmd)
+
+        # Spawn a lightweight cleanup that releases the lock when ffmpeg exits
+        def _wait_and_cleanup(p):
+            try:
+                p.wait()
+            finally:
+                _release_lock()
+
+        import threading as _threading
+        _threading.Thread(target=_wait_and_cleanup, args=(proc,), daemon=True).start()
+    else:
+        current_app.logger.info(f"Another process is already transcoding {out_path}. Streaming the growing file.")
 
     def generate():
         chunk_size = 1024 * 256  # 256KB
@@ -711,8 +782,8 @@ def stream_video():
                 if data:
                     yield data
                 else:
-                    # If ffmpeg still running, wait for more data
-                    if proc.poll() is None:
+                    # If ffmpeg still running OR another process holds the lock, wait for more data
+                    if (proc is not None and proc.poll() is None) or lock_path.exists():
                         time.sleep(0.2)
                         continue
                     # ffmpeg finished and no more data
