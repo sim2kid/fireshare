@@ -5,6 +5,7 @@ import 'video.js/dist/video-js.css'
 // Import and register the quality selector plugin
 import qualitySelectorPlugin from '@silvermine/videojs-quality-selector'
 import '@silvermine/videojs-quality-selector/dist/css/quality-selector.css'
+import { getUrl } from '../../common/utils'
 
 // Register the quality selector plugin with videojs
 qualitySelectorPlugin(videojs)
@@ -113,7 +114,7 @@ const VideoJSPlayer = ({
           // Check server capability once via a lightweight capability endpoint
           if (transcodingEnabledRef.current === null) {
             try {
-              const res = await fetch(`${window.location.origin}/api/transcoding/enabled`)
+              const res = await fetch(`${getUrl()}/api/transcoding/enabled`)
               if (res.ok) {
                 const data = await res.json().catch(() => ({}))
                 transcodingEnabledRef.current = !!data.enabled
