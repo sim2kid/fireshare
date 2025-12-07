@@ -619,6 +619,8 @@ def stream_video():
         resp = Response(data, 206, mimetype='video/mp4', content_type='video/mp4', direct_passthrough=True)
         resp.headers.add('Content-Range', f'bytes {start}-{start + length - 1}/{file_size}')
         resp.headers.add('Accept-Ranges', 'bytes')
+        # Best-effort codec indicator for cached file
+        resp.headers.add('X-Codec-Used', 'H264')
         return resp
 
     # If we already have a playable mp4, serve it with range support
@@ -633,8 +635,49 @@ def stream_video():
     except Exception:
         pass
 
-    # Build an ffmpeg command: remux if already H.264/AAC; else transcode
-    cmd = build_streamable_mp4_command(src_path, out_path)
+    # Parse client codec preferences and apply server rules
+    codecs_csv = request.args.get('codecs', '') or ''
+    try_index = request.args.get('codec_try', '0') or '0'
+    try:
+        try_index = int(try_index)
+    except Exception:
+        try_index = 0
+
+    prefs = [c.strip().upper() for c in codecs_csv.split(',') if c.strip()]
+    # MP4-friendly set we support minimally
+    mp4_friendly = ['H264', 'HEVC', 'AV1']
+    whitelist = [c for c in current_app.config.get('VIDEO_CODEC_WHITELIST', ['H264'])]
+    enable_transcoding = bool(current_app.config.get('ENABLE_TRANSCODING', False))
+    use_gpu = bool(current_app.config.get('TRANSCODE_GPU', False))
+
+    # If transcoding disabled, we only allow default H264 compatibility path (practical approach)
+    if not enable_transcoding:
+        allowed = ['H264'] if 'H264' in whitelist else []
+    else:
+        # Filter by whitelist and MP4-friendly
+        if not prefs:
+            prefs = ['H264']
+        allowed = [c for c in prefs if c in whitelist and c in mp4_friendly]
+        # Apply retry offset
+        if allowed and try_index > 0:
+            try_index = min(try_index, len(allowed) - 1)
+            allowed = allowed[try_index:] + allowed[:try_index]
+
+    # Choose target codec with fallback
+    target_codec = None
+    if allowed:
+        target_codec = allowed[0]
+    else:
+        # Fallbacks: if H264 whitelisted use it, otherwise pick first common option
+        if 'H264' in whitelist:
+            target_codec = 'H264'
+        else:
+            # pick any whitelist value that we support in MP4
+            common = [c for c in whitelist if c in mp4_friendly]
+            target_codec = common[0] if common else 'H264'
+
+    # Build an ffmpeg command: remux if already target-compatible; else transcode
+    cmd = build_streamable_mp4_command(src_path, out_path, target_codec=target_codec, use_gpu=use_gpu)
     current_app.logger.info(f"Starting on-the-fly transcode for {video_id}: {' '.join(cmd)}")
     proc = Popen(cmd)
 
@@ -659,7 +702,8 @@ def stream_video():
     # For progressive streaming we cannot provide Content-Length up-front; return 200 with chunked transfer
     headers = {
         'Content-Type': 'video/mp4',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        'X-Codec-Used': (target_codec or 'H264')
     }
     return Response(generate(), headers=headers)
 

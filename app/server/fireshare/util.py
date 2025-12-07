@@ -100,17 +100,21 @@ def _encoder_available(encoder_name: str) -> bool:
     except Exception:
         return False
 
-def build_streamable_mp4_command(src_path: Path, out_path: Path):
+def build_streamable_mp4_command(src_path: Path, out_path: Path, target_codec: str | None = None, use_gpu: bool | None = None):
     """
     Build an ffmpeg command to create a browser-friendly fragmented MP4 suitable for streaming while writing.
 
-    If the source is already H.264 video and AAC/MP3 audio, perform a fast remux to MP4 with
-    -movflags +faststart+frag_keyframe+empty_moov. Otherwise, transcode video to H.264 and audio to AAC.
+    If the source is already compatible with the requested target codec (default H.264) and AAC/MP3 audio,
+    perform a fast remux to MP4 with -movflags +faststart+frag_keyframe+empty_moov. Otherwise, transcode
+    video to the selected codec and audio to AAC.
 
-    When GPU transcoding is enabled and available, prefer h264_nvenc.
+    When GPU transcoding is enabled and available, prefer NVENC encoders for supported codecs.
     """
     vcodec, acodec = _probe_codecs(src_path)
-    use_gpu = os.getenv('TRANSCODE_GPU', '').lower() in ('true', '1', 'yes')
+
+    # Determine GPU preference: prefer explicit flag; fallback to env for backward compatibility
+    if use_gpu is None:
+        use_gpu = os.getenv('TRANSCODE_GPU', '').lower() in ('true', '1', 'yes')
 
     base = ['ffmpeg', '-v', 'error', '-y', '-i', str(src_path)]
     tail = [
@@ -119,15 +123,45 @@ def build_streamable_mp4_command(src_path: Path, out_path: Path):
         '-f', 'mp4', str(out_path)
     ]
 
-    # If already mp4 friendly, remux only (ensure AAC audio)
-    if (vcodec == 'h264') and (acodec in ('aac', 'mp3', 'mp2')):
+    # Normalize target codec selection (limit to MP4-friendly set for minimal changes)
+    mp4_friendly = {'H264', 'HEVC', 'AV1'}
+    target = (target_codec or 'H264').upper()
+    if target not in mp4_friendly:
+        target = 'H264'
+
+    # If already mp4 friendly for target, remux only (ensure AAC audio)
+    already_ok = False
+    if target == 'H264' and (vcodec == 'h264') and (acodec in ('aac', 'mp3', 'mp2')):
+        already_ok = True
+    elif target == 'HEVC' and (vcodec in ('hevc', 'h265')) and (acodec in ('aac', 'mp3', 'mp2')):
+        already_ok = True
+    elif target == 'AV1' and (vcodec in ('av1',)) and (acodec in ('aac', 'mp3', 'mp2')):
+        already_ok = True
+    if already_ok:
         return base + ['-c:v', 'copy', '-c:a', 'aac'] + tail
 
-    # Choose encoder
-    if use_gpu and _encoder_available('h264_nvenc'):
-        venc = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq:v', '23']
+    # Choose encoder mapping by target
+    if target == 'H264':
+        if use_gpu and _encoder_available('h264_nvenc'):
+            venc = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq:v', '23']
+        else:
+            venc = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '23']
+    elif target == 'HEVC':
+        if use_gpu and _encoder_available('hevc_nvenc'):
+            venc = ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq:v', '23']
+        else:
+            venc = ['-c:v', 'libx265', '-preset', 'medium', '-crf', '28']
+    elif target == 'AV1':
+        if use_gpu and _encoder_available('av1_nvenc'):
+            venc = ['-c:v', 'av1_nvenc', '-preset', 'p5', '-cq:v', '28']
+        else:
+            venc = ['-c:v', 'libaom-av1', '-cpu-used', '6', '-crf', '32']
     else:
-        venc = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '23']
+        # fallback to H264
+        if use_gpu and _encoder_available('h264_nvenc'):
+            venc = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq:v', '23']
+        else:
+            venc = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '23']
 
     aenc = ['-c:a', 'aac', '-b:a', '128k']
     return base + venc + aenc + tail
