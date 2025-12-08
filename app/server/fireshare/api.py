@@ -943,19 +943,44 @@ def transcoding_enabled():
     enabled = current_app.config.get('ENABLE_TRANSCODING', False)
     return jsonify({"enabled": bool(enabled)})
 
-def get_folder_size(folder_path):
+def get_folder_size(folder_path: str) -> int:
+    """Safely compute the total size of regular files under folder_path.
+
+    - Skips symlinks and special files.
+    - Ignores files that disappear during traversal (TOCTOU) or that are not
+      readable due to permissions, avoiding raising errors for best‑effort size.
+    """
     total_size = 0
-    for dirpath, dirnames, filenames in os.walk(folder_path):
+    # Ignore errors during traversal (e.g., permission denied directories)
+    for dirpath, dirnames, filenames in os.walk(folder_path, onerror=lambda e: None):
         for f in filenames:
             fp = os.path.join(dirpath, f)
-            if os.path.isfile(fp):  # Avoid broken symlinks
-                total_size += os.path.getsize(fp)
+            try:
+                # Skip symlinks (can point to /proc, sockets, etc.)
+                if os.path.islink(fp):
+                    continue
+                # Only count regular files
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    total_size += os.path.getsize(fp)
+                except (FileNotFoundError, PermissionError, OSError):
+                    # File might have been removed between isfile and getsize,
+                    # or be unreadable; skip it.
+                    continue
+            except OSError:
+                # Any unexpected OS error on this entry; skip it and continue.
+                continue
     return total_size
 
 @api.route('/api/folder-size', methods=['GET'])
 def folder_size():
-    print("Folder size endpoint was hit!")  # Debugging line
     path = request.args.get('path', default='.', type=str)
+    # Validate the requested path
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist", "folder": path}), 400
+    if not os.path.isdir(path):
+        return jsonify({"error": "Path is not a directory", "folder": path}), 400
     size_bytes = get_folder_size(path)
     size_mb = size_bytes / (1024 * 1024)
 
