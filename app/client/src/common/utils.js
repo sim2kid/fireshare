@@ -2,9 +2,9 @@ import React from 'react'
 
 let isLocalhost = (window.location.hostname.indexOf('localhost') >= 0 || window.location.hostname.indexOf('127.0.0.1') >= 0) && window.location.port !== '';
 export const getServedBy = () => {
-  return isLocalhost
-    ? 'flask'
-    : 'nginx'
+  // Deprecated: Client no longer switches behavior based on host.
+  // Always serve via the stream API on both localhost and production.
+  return 'flask'
 }
 
 export const getUrl = () => {
@@ -101,23 +101,14 @@ export const copyToClipboard = (textToCopy) => {
  */
 export const getVideoUrl = (videoId, quality, extension) => {
   const URL = getUrl()
-  const SERVED_BY = getServedBy()
   const codecs = getClientSupportedCodecs(videoId).join(',')
 
+  // Always use the stream API regardless of environment
   if (quality === '720p' || quality === '1080p') {
-    if (SERVED_BY === 'nginx') {
-      return `${URL}/_content/derived/${videoId}/${videoId}-${quality}.mp4`
-    }
-    // Use new ffmpeg-backed streaming endpoint
     return `${URL}/api/stream?id=${videoId}&quality=${quality}&codecs=${encodeURIComponent(codecs)}&codec_try=0`
   }
 
   // Original quality
-  if (SERVED_BY === 'nginx') {
-    const videoPath = getVideoPath(videoId, extension)
-    return `${URL}/_content/video/${videoPath}`
-  }
-  // Use new ffmpeg-backed streaming endpoint for original
   if (extension === '.mkv') {
     return `${URL}/api/stream?id=${videoId}&subid=1&codecs=${encodeURIComponent(codecs)}&codec_try=0`
   }

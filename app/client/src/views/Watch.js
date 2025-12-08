@@ -8,12 +8,12 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import SnackbarAlert from '../components/alert/SnackbarAlert'
 import NotFound from './NotFound'
 import { VideoService } from '../services'
-import { getServedBy, getUrl, getPublicWatchUrl, copyToClipboard, getVideoSources, getVideoUrl } from '../common/utils'
+import { getUrl, getPublicWatchUrl, copyToClipboard, getVideoSources, getVideoUrl } from '../common/utils'
 import VideoJSPlayer from '../components/misc/VideoJSPlayer'
 
 const URL = getUrl()
 const PURL = getPublicWatchUrl()
-const SERVED_BY = getServedBy()
+// Note: Client always uses stream API; no environment-based serving differences
 
 function useQuery() {
   const { search } = useLocation()
@@ -67,7 +67,6 @@ const Watch = ({ authenticated }) => {
     const fetchDuration = async () => {
       try {
         if (!details) return
-        if (SERVED_BY === 'nginx') return // browser will get duration from static file
         const extension = details?.extension || '.mp4'
         const url = getVideoUrl(id, 'original', extension)
         const res = await fetch(url, { method: 'HEAD' })
@@ -115,9 +114,6 @@ const Watch = ({ authenticated }) => {
 
 
   const getPosterUrl = () => {
-    if (SERVED_BY === 'nginx') {
-      return `${URL}/_content/derived/${id}/poster.jpg`
-    }
     return `${URL}/api/video/poster?id=${id}`
   }
 
@@ -199,20 +195,8 @@ const Watch = ({ authenticated }) => {
         <meta property="og:type" value="video" />
         <meta property="og:url" value={window.location.href} />
         <meta property="og:title" value={details?.info?.title} />
-        <meta
-          property="og:image"
-          value={
-            SERVED_BY === 'nginx' ? `${URL}/_content/derived/${id}/poster.jpg` : `${URL}/api/video/poster?id=${id}`
-          }
-        />
-        <meta
-          property="og:video"
-          value={
-            SERVED_BY === 'nginx'
-              ? `${URL}/_content/video/${id}${details?.extension || '.mp4'}`
-              : `${URL}/api/stream?id=${id}`
-          }
-        />
+        <meta property="og:image" value={`${URL}/api/video/poster?id=${id}`} />
+        <meta property="og:video" value={`${URL}/api/stream?id=${id}`} />
         <meta property="og:video:width" value={details?.info?.width} />
         <meta property="og:video:height" value={details?.info?.height} />
         <meta property="og:site_name" value="Fireshare" />

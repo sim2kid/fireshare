@@ -13,7 +13,7 @@ import LightTooltip from '../misc/LightTooltip'
 
 const URL = getUrl()
 const PURL = getPublicWatchUrl()
-const SERVED_BY = getServedBy()
+
 
 const CompactVideoCard = ({ video, openVideoHandler, alertHandler, cardWidth, authenticated, deleted }) => {
   const [intVideo, setIntVideo] = React.useState(video)
@@ -115,15 +115,15 @@ const CompactVideoCard = ({ video, openVideoHandler, alertHandler, cardWidth, au
     // Prefer 720p if available, else 1080p, else original
     const has720p = video.info?.has_720p
     const has1080p = video.info?.has_1080p
-    
+
     if (has720p) {
       return getVideoUrl(video.video_id, '720p', video.extension)
     }
-    
+
     if (has1080p) {
       return getVideoUrl(video.video_id, '1080p', video.extension)
     }
-    
+
     // Fall back to original
     return getVideoUrl(video.video_id, 'original', video.extension)
   }
@@ -258,11 +258,7 @@ const CompactVideoCard = ({ video, openVideoHandler, alertHandler, cardWidth, au
               </Box>
             )}
             <img
-              src={`${
-                SERVED_BY === 'nginx'
-                  ? `${URL}/_content/derived/${video.video_id}/poster.jpg`
-                  : `${URL}/api/video/poster?id=${video.video_id}`
-              }`}
+              src={`${URL}/api/video/poster?id=${video.video_id}`}
               alt=""
               style={{
                 width: cardWidth,

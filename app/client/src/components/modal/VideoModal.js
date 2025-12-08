@@ -172,9 +172,6 @@ const VideoModal = ({ open, onClose, videoId, feedView, authenticated, updateCal
 
 
   const getPosterUrl = () => {
-    if (SERVED_BY === 'nginx') {
-      return `${URL}/_content/derived/${vid.video_id}/poster.jpg`
-    }
     return `${URL}/api/video/poster?id=${vid.video_id}`
   }
 
